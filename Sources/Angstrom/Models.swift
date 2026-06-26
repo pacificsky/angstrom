@@ -1,23 +1,66 @@
 import Foundation
 
+/// The kind of device on the account. The cloud reports this as the `type`
+/// field on each thing.
+public enum DeviceType: Sendable, Equatable, Hashable, Codable {
+    /// An espresso machine (Linea Micra/Mini, GS3, …). Supports remote power.
+    case coffeeMachine
+    /// A grinder (Pico, Swan). Reports status but has no remote power command.
+    case grinder
+    /// Any other/unrecognized device type, with the raw value.
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "CoffeeMachine": self = .coffeeMachine
+        case "Grinder": self = .grinder
+        default: self = .other(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .coffeeMachine: return "CoffeeMachine"
+        case .grinder: return "Grinder"
+        case .other(let value): return value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 /// A machine ("thing") registered to the account.
 public struct Machine: Codable, Sendable, Identifiable, Hashable {
     public let serialNumber: String
     public var name: String
     public var modelName: String
+    /// The kind of device — coffee machine, grinder, etc.
+    public var type: DeviceType
 
     public var id: String { serialNumber }
     /// Falls back to the serial when the machine has no friendly name.
     public var displayName: String { name.isEmpty ? serialNumber : name }
+    /// Whether this device supports remote power on/off. Only coffee machines
+    /// accept the change-mode command; grinders manage their own standby.
+    public var supportsPower: Bool { type == .coffeeMachine }
 
-    public init(serialNumber: String, name: String = "", modelName: String = "") {
+    public init(serialNumber: String, name: String = "", modelName: String = "",
+                type: DeviceType = .coffeeMachine) {
         self.serialNumber = serialNumber
         self.name = name
         self.modelName = modelName
+        self.type = type
     }
 
     private enum CodingKeys: String, CodingKey {
-        case serialNumber, name, modelName
+        case serialNumber, name, modelName, type
     }
 
     public init(from decoder: Decoder) throws {
@@ -25,12 +68,14 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         serialNumber = try c.decode(String.self, forKey: .serialNumber)
         name = (try? c.decode(String.self, forKey: .name)) ?? ""
         modelName = (try? c.decode(String.self, forKey: .modelName)) ?? ""
+        type = (try? c.decode(DeviceType.self, forKey: .type)) ?? .coffeeMachine
     }
 }
 
-/// Power state derived from the machine's `CMMachineStatus` dashboard widget.
+/// Power state derived from the machine's status dashboard widget
+/// (`CMMachineStatus` for coffee machines, `GMachineStatus` for grinders).
 public enum PowerState: Sendable, Equatable {
-    /// Mode is `BrewingMode` — on and ready to brew.
+    /// Mode is `BrewingMode` (coffee machine) or `GrindingMode` (grinder) — on.
     case on
     /// Mode is `StandBy` — off.
     case off
