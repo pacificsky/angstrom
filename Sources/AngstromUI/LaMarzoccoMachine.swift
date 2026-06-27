@@ -3,13 +3,13 @@ import Observation
 import Angstrom
 
 /// An observable, retained view of a single La Marzocco machine, built on top of
-/// the stateless ``LaMarzoccoCloudClient`` for SwiftUI/UI binding.
+/// the stateless `LaMarzoccoCloudClient` for SwiftUI/UI binding.
 ///
 /// It holds the last-known ``dashboard``/``settings``/``schedule``, merges live
 /// websocket pushes into ``dashboard`` while ``start()``ed, and applies
 /// optimistic updates after a command is accepted so the UI reflects a change
 /// before the authoritative push arrives. Model-gated commands throw
-/// ``LaMarzoccoError/unsupportedModel(_:)`` on machines that don't support them.
+/// `LaMarzoccoError.unsupportedModel` on machines that don't support them.
 ///
 /// All state is `@MainActor`-isolated; the underlying client remains an `actor`.
 @MainActor

@@ -15,7 +15,7 @@ extension JSONDecoder {
 
 extension JSONEncoder {
     /// The encoder matching ``JSONDecoder/laMarzocco()`` (ms-epoch dates). Use
-    /// this to persist `Codable` types like ``Machine`` so a ``Date`` survives a
+    /// this to persist `Codable` types like ``Machine`` so a `Date` survives a
     /// round-trip — a vanilla `JSONEncoder` would write a different date format
     /// and silently corrupt timestamps on decode.
     public static func laMarzocco() -> JSONEncoder {
