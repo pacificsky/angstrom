@@ -148,16 +148,36 @@ public actor LaMarzoccoCloudClient {
         }
     }
 
-    /// Read the current power state of a machine.
+    /// Read the current power state of a machine or grinder.
     ///
-    /// A convenience over ``dashboard(serial:)`` / ``Dashboard/machineStatus``.
+    /// Handles both `CMMachineStatus` (coffee machines) and `GMachineStatus`
+    /// (grinders); the full typed state is available via ``dashboard(serial:)``.
     public func powerState(serial: String) async throws -> PowerState {
-        switch try await dashboard(serial: serial).machineStatus?.mode {
-        case .brewing: return .on
-        case .standby: return .off
-        case .none: return .unknown
-        case .some(let mode): return .other(mode.rawValue)
+        let data = try await authed(path: "/things/\(serial)/dashboard", method: "GET")
+        return try Self.parsePowerState(fromDashboard: data)
+    }
+
+    /// Parse a dashboard payload into a ``PowerState``. Coffee machines report a
+    /// `CMMachineStatus` widget and grinders a `GMachineStatus` widget; both
+    /// carry the same `output.mode` shape, differing only in the "on" value
+    /// (`BrewingMode` vs `GrindingMode`). Both use `StandBy` for off.
+    static func parsePowerState(fromDashboard data: Data) throws -> PowerState {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let widgets = obj["widgets"] as? [[String: Any]] else {
+            throw LaMarzoccoError.decoding("dashboard shape")
         }
+        for widget in widgets {
+            guard let code = widget["code"] as? String,
+                  code == "CMMachineStatus" || code == "GMachineStatus" else { continue }
+            let output = widget["output"] as? [String: Any]
+            switch output?["mode"] as? String {
+            case "BrewingMode", "GrindingMode": return .on
+            case "StandBy": return .off
+            case let other?: return .other(other)
+            default: return .unknown
+            }
+        }
+        return .unknown
     }
 
     // MARK: - Auth

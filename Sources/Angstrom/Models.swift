@@ -25,6 +25,9 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
     public var id: String { serialNumber }
     /// Falls back to the serial when the machine has no friendly name.
     public var displayName: String { name.isEmpty ? serialNumber : name }
+    /// Whether this device supports remote power on/off. Only coffee machines
+    /// accept the change-mode command; grinders manage their own standby.
+    public var supportsPower: Bool { type == .coffeeMachine }
 
     public init(
         serialNumber: String,

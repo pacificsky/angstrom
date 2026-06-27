@@ -113,9 +113,32 @@ public enum Model: Sendable, Hashable, Codable {
 }
 
 /// The kind of device behind a serial number.
-public enum DeviceType: String, Sendable, Hashable, Codable {
-    case coffeeMachine = "CoffeeMachine"
-    case grinder = "Grinder"
+public enum DeviceType: Sendable, Equatable, Hashable, Codable {
+    case coffeeMachine
+    case grinder
+    /// Any other/unrecognized device type, with the raw value.
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "CoffeeMachine": self = .coffeeMachine
+        case "Grinder": self = .grinder
+        default: self = .other(rawValue)
+        }
+    }
+    public var rawValue: String {
+        switch self {
+        case .coffeeMachine: "CoffeeMachine"
+        case .grinder: "Grinder"
+        case .other(let value): value
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(rawValue)
+    }
 }
 
 // MARK: - Machine state
