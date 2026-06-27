@@ -76,17 +76,26 @@ final class DashboardTests: XCTestCase {
 
     // MARK: - Resilience
 
-    func testGrinderWidgetsDemoteToUnknownWithoutFailing() throws {
-        // We don't model grinder widgets yet (deferred to M5); they must land in
-        // `.unknown` rather than break the whole decode. ThingScale still decodes.
+    func testGrinderWidgetsDecode() throws {
+        // M5: grinder widgets are now typed (no longer demoted to `.unknown`).
         let d = try dashboard("dashboard_pico")
         XCTAssertEqual(d.machine.type, .grinder)
         XCTAssertTrue(d.machine.model.isGrinder)
+        XCTAssertEqual(d.unknownWidgetCodes, [], "all grinder widgets should decode")
         XCTAssertNotNil(d.scale)
-        XCTAssertEqual(
-            Set(d.unknownWidgetCodes),
-            ["GMachineStatus", "GDoses", "GSingleDoseMode", "GBaristaLight"]
-        )
+
+        XCTAssertEqual(d.grinderStatus?.status, .standby)
+        XCTAssertEqual(d.grinderStatus?.mode, .standby)
+        XCTAssertEqual(d.grinderStatus?.availableModes, [.grinding, .standby])
+
+        XCTAssertEqual(d.grinderDoses?.mode, .time)
+        XCTAssertEqual(d.grinderDoses?.scaleConnected, false)
+        XCTAssertEqual(d.grinderDoses?.doses.timeType.first?.doseIndex, .doseA)
+        XCTAssertEqual(d.grinderDoses?.doses.timeType.first?.dose, 1.5)
+        XCTAssertEqual(d.grinderDoses?.doses.massType.count, 2)
+
+        XCTAssertEqual(d.grinderSingleDose?.enabled, false)
+        XCTAssertEqual(d.grinderBaristaLight?.enabled, true)
     }
 
     func testUnknownWidgetCodeIsCapturedNotFatal() throws {

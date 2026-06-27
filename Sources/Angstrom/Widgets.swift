@@ -9,7 +9,7 @@ import Foundation
 /// Widgets are decoded resiliently — an unrecognized widget code, or one whose
 /// payload this version can't decode, becomes ``WidgetKind/unknown(code:)``
 /// rather than failing the whole dashboard.
-public struct Dashboard: Sendable, Hashable, Decodable {
+public struct Dashboard: Sendable, Hashable, Codable {
     /// Device identity carried at the top of the dashboard payload.
     public let machine: Machine
     /// The machine's widgets, in the order the cloud returned them.
@@ -26,6 +26,12 @@ public struct Dashboard: Sendable, Hashable, Decodable {
         machine = try Machine(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         widgets = (try? c.decode([Widget].self, forKey: .widgets)) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try machine.encode(to: encoder)
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(widgets, forKey: .widgets)
     }
 
     private func first<T>(_ extract: (WidgetKind) -> T?) -> T? {
@@ -46,6 +52,10 @@ public struct Dashboard: Sendable, Hashable, Decodable {
     public var rinseFlush: RinseFlush? { first { if case .rinseFlush(let v) = $0 { return v }; return nil } }
     public var noWater: NoWater? { first { if case .noWater(let v) = $0 { return v }; return nil } }
     public var scale: Scale? { first { if case .scale(let v) = $0 { return v }; return nil } }
+    public var grinderStatus: GrinderMachineStatus? { first { if case .grinderStatus(let v) = $0 { return v }; return nil } }
+    public var grinderDoses: GrinderDoses? { first { if case .grinderDoses(let v) = $0 { return v }; return nil } }
+    public var grinderSingleDose: GrinderSingleDose? { first { if case .grinderSingleDose(let v) = $0 { return v }; return nil } }
+    public var grinderBaristaLight: GrinderBaristaLight? { first { if case .grinderBaristaLight(let v) = $0 { return v }; return nil } }
 
     /// Codes of widgets this version did not recognize or could not decode.
     public var unknownWidgetCodes: [String] {
@@ -67,7 +77,7 @@ public struct Dashboard: Sendable, Hashable, Decodable {
 
 /// One entry from a dashboard's `widgets` array: its `code`, group `index`, and
 /// the decoded payload (``kind``).
-public struct Widget: Sendable, Hashable, Decodable {
+public struct Widget: Sendable, Hashable, Codable {
     public let code: String
     public let index: Int
     public let kind: WidgetKind
@@ -88,6 +98,35 @@ public struct Widget: Sendable, Hashable, Decodable {
         self.kind = Widget.decodeKind(code: code, from: c)
     }
 
+    /// Re-encodes the envelope and the typed payload back under `output`. A
+    /// ``WidgetKind/unknown(code:)`` widget retains its `code`/`index` but has no
+    /// `output` to write (the original payload wasn't captured on decode).
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(code, forKey: .code)
+        try c.encode(index, forKey: .index)
+        switch kind {
+        case .machineStatus(let v): try c.encode(v, forKey: .output)
+        case .coffeeBoiler(let v): try c.encode(v, forKey: .output)
+        case .steamBoilerLevel(let v): try c.encode(v, forKey: .output)
+        case .steamBoilerTemperature(let v): try c.encode(v, forKey: .output)
+        case .preExtraction(let v): try c.encode(v, forKey: .output)
+        case .preBrewing(let v): try c.encode(v, forKey: .output)
+        case .backFlush(let v): try c.encode(v, forKey: .output)
+        case .groupDoses(let v): try c.encode(v, forKey: .output)
+        case .hotWaterDose(let v): try c.encode(v, forKey: .output)
+        case .brewByWeightDoses(let v): try c.encode(v, forKey: .output)
+        case .rinseFlush(let v): try c.encode(v, forKey: .output)
+        case .noWater(let v): try c.encode(v, forKey: .output)
+        case .scale(let v): try c.encode(v, forKey: .output)
+        case .grinderStatus(let v): try c.encode(v, forKey: .output)
+        case .grinderDoses(let v): try c.encode(v, forKey: .output)
+        case .grinderSingleDose(let v): try c.encode(v, forKey: .output)
+        case .grinderBaristaLight(let v): try c.encode(v, forKey: .output)
+        case .unknown: break
+        }
+    }
+
     private static func decodeKind(code: String, from c: KeyedDecodingContainer<CodingKeys>) -> WidgetKind {
         func output<T: Decodable>(_ type: T.Type) -> T? { try? c.decode(T.self, forKey: .output) }
         switch code {
@@ -104,6 +143,10 @@ public struct Widget: Sendable, Hashable, Decodable {
         case "CMRinseFlush": if let v = output(RinseFlush.self) { return .rinseFlush(v) }
         case "CMNoWater": if let v = output(NoWater.self) { return .noWater(v) }
         case "ThingScale": if let v = output(Scale.self) { return .scale(v) }
+        case "GMachineStatus": if let v = output(GrinderMachineStatus.self) { return .grinderStatus(v) }
+        case "GDoses": if let v = output(GrinderDoses.self) { return .grinderDoses(v) }
+        case "GSingleDoseMode": if let v = output(GrinderSingleDose.self) { return .grinderSingleDose(v) }
+        case "GBaristaLight": if let v = output(GrinderBaristaLight.self) { return .grinderBaristaLight(v) }
         default: break
         }
         return .unknown(code: code)
@@ -125,13 +168,17 @@ public enum WidgetKind: Sendable, Hashable {
     case rinseFlush(RinseFlush)
     case noWater(NoWater)
     case scale(Scale)
+    case grinderStatus(GrinderMachineStatus)
+    case grinderDoses(GrinderDoses)
+    case grinderSingleDose(GrinderSingleDose)
+    case grinderBaristaLight(GrinderBaristaLight)
     /// A widget code this version doesn't model, or whose payload failed to decode.
     case unknown(code: String)
 }
 
 // MARK: - Machine status
 
-public struct MachineStatus: Sendable, Hashable, Decodable {
+public struct MachineStatus: Sendable, Hashable, Codable {
     public let status: MachineState
     public let availableModes: [MachineMode]
     public let mode: MachineMode
@@ -139,14 +186,14 @@ public struct MachineStatus: Sendable, Hashable, Decodable {
     public let brewingStartTime: Date?
 }
 
-public struct NextStatus: Sendable, Hashable, Decodable {
+public struct NextStatus: Sendable, Hashable, Codable {
     public let status: MachineState
     public let startTime: Date
 }
 
 // MARK: - Boilers
 
-public struct CoffeeBoiler: Sendable, Hashable, Decodable {
+public struct CoffeeBoiler: Sendable, Hashable, Codable {
     public let status: BoilerStatus
     public let enabled: Bool
     public let enabledSupported: Bool
@@ -160,7 +207,7 @@ public struct CoffeeBoiler: Sendable, Hashable, Decodable {
     public var target: Measurement<UnitTemperature> { .init(value: targetTemperature, unit: .celsius) }
 }
 
-public struct SteamBoilerLevel: Sendable, Hashable, Decodable {
+public struct SteamBoilerLevel: Sendable, Hashable, Codable {
     public let status: BoilerStatus
     public let enabled: Bool
     public let enabledSupported: Bool
@@ -169,7 +216,7 @@ public struct SteamBoilerLevel: Sendable, Hashable, Decodable {
     public let readyStartTime: Date?
 }
 
-public struct SteamBoilerTemperature: Sendable, Hashable, Decodable {
+public struct SteamBoilerTemperature: Sendable, Hashable, Codable {
     public let status: BoilerStatus
     public let enabled: Bool
     public let enabledSupported: Bool
@@ -185,39 +232,39 @@ public struct SteamBoilerTemperature: Sendable, Hashable, Decodable {
 
 // MARK: - Pre-extraction
 
-public struct PreExtraction: Sendable, Hashable, Decodable {
+public struct PreExtraction: Sendable, Hashable, Codable {
     public let availableModes: [PreExtractionMode]
     public let mode: PreExtractionMode
     public let times: PreExtractionTimes
 }
 
-public struct PreExtractionTimes: Sendable, Hashable, Decodable {
+public struct PreExtractionTimes: Sendable, Hashable, Codable {
     public let `in`: PreExtractionSeconds
     public let out: PreExtractionSeconds
     private enum CodingKeys: String, CodingKey { case `in` = "In", out = "Out" }
 }
 
-public struct PreExtractionSeconds: Sendable, Hashable, Decodable {
+public struct PreExtractionSeconds: Sendable, Hashable, Codable {
     public let seconds: Double
     public let secondsMin: PreExtractionModeValues
     public let secondsMax: PreExtractionModeValues
     public let secondsStep: PreExtractionModeValues
 }
 
-public struct PreExtractionModeValues: Sendable, Hashable, Decodable {
+public struct PreExtractionModeValues: Sendable, Hashable, Codable {
     public let preInfusion: Double
     public let preBrewing: Double
     private enum CodingKeys: String, CodingKey { case preInfusion = "PreInfusion", preBrewing = "PreBrewing" }
 }
 
-public struct PreBrewing: Sendable, Hashable, Decodable {
+public struct PreBrewing: Sendable, Hashable, Codable {
     public let availableModes: [PreExtractionMode]
     public let mode: PreExtractionMode
     public let times: PreBrewingTimes
     public let doseIndexSupported: Bool?
 }
 
-public struct PreBrewingTimes: Sendable, Hashable, Decodable {
+public struct PreBrewingTimes: Sendable, Hashable, Codable {
     public let preInfusion: [PreBrewingDoseTimes]
     public let preBrewing: [PreBrewingDoseTimes]
     private enum CodingKeys: String, CodingKey { case preInfusion = "PreInfusion", preBrewing = "PreBrewing" }
@@ -230,7 +277,7 @@ public struct PreBrewingTimes: Sendable, Hashable, Decodable {
     }
 }
 
-public struct PreBrewingDoseTimes: Sendable, Hashable, Decodable {
+public struct PreBrewingDoseTimes: Sendable, Hashable, Codable {
     public let doseIndex: DoseIndex
     public let seconds: InOutSeconds
     public let secondsMin: InOutSeconds
@@ -238,7 +285,7 @@ public struct PreBrewingDoseTimes: Sendable, Hashable, Decodable {
     public let secondsStep: InOutSeconds
 }
 
-public struct InOutSeconds: Sendable, Hashable, Decodable {
+public struct InOutSeconds: Sendable, Hashable, Codable {
     public let `in`: Double
     public let out: Double
     private enum CodingKeys: String, CodingKey { case `in` = "In", out = "Out" }
@@ -246,12 +293,12 @@ public struct InOutSeconds: Sendable, Hashable, Decodable {
 
 // MARK: - Cleaning
 
-public struct BackFlush: Sendable, Hashable, Decodable {
+public struct BackFlush: Sendable, Hashable, Codable {
     public let status: BackFlushStatus
     public let lastCleaningStartTime: Date?
 }
 
-public struct RinseFlush: Sendable, Hashable, Decodable {
+public struct RinseFlush: Sendable, Hashable, Codable {
     public let enabled: Bool
     public let enabledSupported: Bool
     public let timeSeconds: Double
@@ -262,13 +309,13 @@ public struct RinseFlush: Sendable, Hashable, Decodable {
 
 // MARK: - Doses
 
-public struct GroupDoses: Sendable, Hashable, Decodable {
+public struct GroupDoses: Sendable, Hashable, Codable {
     public let mode: DoseMode?
     public let availableModes: [DoseMode]?
     public let doses: DosePulses
 }
 
-public struct DosePulses: Sendable, Hashable, Decodable {
+public struct DosePulses: Sendable, Hashable, Codable {
     public let pulsesType: [DoseSetting]
     private enum CodingKeys: String, CodingKey { case pulsesType = "PulsesType" }
 
@@ -278,7 +325,7 @@ public struct DosePulses: Sendable, Hashable, Decodable {
     }
 }
 
-public struct DoseSetting: Sendable, Hashable, Decodable {
+public struct DoseSetting: Sendable, Hashable, Codable {
     public let doseIndex: DoseIndex
     public let dose: Double
     public let doseMin: Double
@@ -286,7 +333,7 @@ public struct DoseSetting: Sendable, Hashable, Decodable {
     public let doseStep: Double
 }
 
-public struct HotWaterDose: Sendable, Hashable, Decodable {
+public struct HotWaterDose: Sendable, Hashable, Codable {
     public let enabled: Bool
     public let enabledSupported: Bool
     public let doses: [DoseSetting]
@@ -300,12 +347,19 @@ public struct HotWaterDose: Sendable, Hashable, Decodable {
     }
 }
 
-public struct BrewByWeightDoses: Sendable, Hashable, Decodable {
+public struct BrewByWeightDoses: Sendable, Hashable, Codable {
     public let scaleConnected: Bool
     public let mode: DoseMode?
     public let availableModes: [DoseMode]?
     public let doses: BrewByWeightDosePair
     private enum CodingKeys: String, CodingKey { case scaleConnected, mode, availableModes, doses }
+
+    public init(scaleConnected: Bool, mode: DoseMode?, availableModes: [DoseMode]?, doses: BrewByWeightDosePair) {
+        self.scaleConnected = scaleConnected
+        self.mode = mode
+        self.availableModes = availableModes
+        self.doses = doses
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -316,13 +370,13 @@ public struct BrewByWeightDoses: Sendable, Hashable, Decodable {
     }
 }
 
-public struct BrewByWeightDosePair: Sendable, Hashable, Decodable {
+public struct BrewByWeightDosePair: Sendable, Hashable, Codable {
     public let dose1: BaseDose
     public let dose2: BaseDose
     private enum CodingKeys: String, CodingKey { case dose1 = "Dose1", dose2 = "Dose2" }
 }
 
-public struct BaseDose: Sendable, Hashable, Decodable {
+public struct BaseDose: Sendable, Hashable, Codable {
     public let dose: Double
     public let doseMin: Double
     public let doseMax: Double
@@ -331,14 +385,116 @@ public struct BaseDose: Sendable, Hashable, Decodable {
 
 // MARK: - Misc
 
-public struct NoWater: Sendable, Hashable, Decodable {
+public struct NoWater: Sendable, Hashable, Codable {
     public let alarm: Bool
     private enum CodingKeys: String, CodingKey { case alarm = "allarm" }
 }
 
-public struct Scale: Sendable, Hashable, Decodable {
+public struct Scale: Sendable, Hashable, Codable {
     public let name: String
     public let connected: Bool
     public let batteryLevel: Double
     public let calibrationRequired: Bool
+}
+
+// MARK: - Grinder widgets
+
+public struct GrinderMachineStatus: Sendable, Hashable, Codable {
+    public let status: GrinderMode
+    public let availableModes: [GrinderMode]
+    public let mode: GrinderMode
+    public let readyStartTime: Date?
+
+    private enum CodingKeys: String, CodingKey { case status, availableModes, mode, readyStartTime }
+
+    public init(status: GrinderMode, availableModes: [GrinderMode], mode: GrinderMode, readyStartTime: Date?) {
+        self.status = status
+        self.availableModes = availableModes
+        self.mode = mode
+        self.readyStartTime = readyStartTime
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(GrinderMode.self, forKey: .status)
+        availableModes = (try? c.decode([GrinderMode].self, forKey: .availableModes)) ?? []
+        mode = try c.decode(GrinderMode.self, forKey: .mode)
+        readyStartTime = (try? c.decodeIfPresent(Date.self, forKey: .readyStartTime)) ?? nil
+    }
+}
+
+public struct GrinderDoses: Sendable, Hashable, Codable {
+    public let scaleConnected: Bool
+    public let mode: GrinderDoseMode
+    public let doses: GrinderDosesSettings
+    public let speedLevelsSupported: Bool
+    public let speedLevels: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case scaleConnected, mode, doses, speedLevelsSupported, speedLevels
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        scaleConnected = (try? c.decode(Bool.self, forKey: .scaleConnected)) ?? false
+        mode = try c.decode(GrinderDoseMode.self, forKey: .mode)
+        doses = (try? c.decode(GrinderDosesSettings.self, forKey: .doses)) ?? GrinderDosesSettings()
+        speedLevelsSupported = (try? c.decode(Bool.self, forKey: .speedLevelsSupported)) ?? false
+        speedLevels = (try? c.decodeIfPresent(String.self, forKey: .speedLevels)) ?? nil
+    }
+}
+
+public struct GrinderDosesSettings: Sendable, Hashable, Codable {
+    /// Doses configured in time mode (seconds).
+    public let timeType: [GrinderDoseSetting]
+    /// Doses configured in mass mode (grams).
+    public let massType: [GrinderDoseSetting]
+
+    private enum CodingKeys: String, CodingKey { case timeType = "TimeType", massType = "MassType" }
+
+    public init(timeType: [GrinderDoseSetting] = [], massType: [GrinderDoseSetting] = []) {
+        self.timeType = timeType
+        self.massType = massType
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        timeType = (try? c.decode([GrinderDoseSetting].self, forKey: .timeType)) ?? []
+        massType = (try? c.decode([GrinderDoseSetting].self, forKey: .massType)) ?? []
+    }
+}
+
+public struct GrinderDoseSetting: Sendable, Hashable, Codable {
+    public let doseIndex: DoseIndex
+    public let dose: Double
+    public let doseMin: Double
+    public let doseMax: Double
+    public let doseStep: Double
+    public let speedAutoSupported: Bool
+    public let speedAuto: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case doseIndex, dose, doseMin, doseMax, doseStep, speedAutoSupported, speedAuto
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        doseIndex = try c.decode(DoseIndex.self, forKey: .doseIndex)
+        dose = try c.decode(Double.self, forKey: .dose)
+        doseMin = (try? c.decode(Double.self, forKey: .doseMin)) ?? 0
+        doseMax = (try? c.decode(Double.self, forKey: .doseMax)) ?? 0
+        doseStep = (try? c.decode(Double.self, forKey: .doseStep)) ?? 0
+        speedAutoSupported = (try? c.decode(Bool.self, forKey: .speedAutoSupported)) ?? false
+        speedAuto = (try? c.decodeIfPresent(String.self, forKey: .speedAuto)) ?? nil
+    }
+}
+
+public struct GrinderSingleDose: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
+}
+
+public struct GrinderBaristaLight: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
 }

@@ -125,6 +125,8 @@ public enum LaMarzoccoError: Error, Sendable, Equatable {
     case commandTimedOut
     /// The machine reported a command as failed.
     case commandFailed(status: String, errorCode: String?)
+    /// The requested action isn't supported on this device model.
+    case unsupportedModel(String)
 }
 
 extension LaMarzoccoError: LocalizedError {
@@ -148,6 +150,8 @@ extension LaMarzoccoError: LocalizedError {
             return "The machine did not confirm the command in time."
         case .commandFailed(let status, let errorCode):
             return "The machine rejected the command (\(status)\(errorCode.map { ", \($0)" } ?? ""))."
+        case .unsupportedModel(let message):
+            return "Unsupported for this machine: \(message)"
         }
     }
 }

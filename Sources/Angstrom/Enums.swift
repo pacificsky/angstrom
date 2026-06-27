@@ -6,7 +6,7 @@ extension JSONDecoder {
     /// A decoder configured for La Marzocco's wire format, where timestamps are
     /// milliseconds since the Unix epoch. Use this for every cloud response so
     /// `Date` fields decode uniformly.
-    static func laMarzocco() -> JSONDecoder {
+    public static func laMarzocco() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         return decoder
@@ -18,7 +18,7 @@ extension JSONEncoder {
     /// this to persist `Codable` types like ``Machine`` so a ``Date`` survives a
     /// round-trip — a vanilla `JSONEncoder` would write a different date format
     /// and silently corrupt timestamps on decode.
-    static func laMarzocco() -> JSONEncoder {
+    public static func laMarzocco() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
@@ -325,6 +325,67 @@ public enum DoseIndex: String, Sendable, Hashable, Codable, CaseIterable {
 public enum PreExtractionDoseIndex: String, Sendable, Hashable, Codable, CaseIterable {
     case byGroup = "ByGroup"
     case byDose = "ByDose"
+}
+
+// MARK: - Grinder
+
+/// A grinder's running mode (`GMachineStatus.status`/`mode`).
+public enum GrinderMode: Sendable, Hashable, Codable {
+    case grinding
+    case standby
+    /// A mode this version doesn't recognize, carrying the raw value.
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "GrindingMode": self = .grinding
+        case "StandBy": self = .standby
+        default: self = .other(rawValue)
+        }
+    }
+    public var rawValue: String {
+        switch self {
+        case .grinding: "GrindingMode"
+        case .standby: "StandBy"
+        case .other(let v): v
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(rawValue)
+    }
+}
+
+/// A grinder's dose-measurement mode (`GDoses.mode`). Tolerant of unknown values
+/// (carried in `.other`) so a new mode doesn't demote the whole `GDoses` widget,
+/// matching the convention used by ``DoseMode`` and the other status/mode enums.
+public enum GrinderDoseMode: Sendable, Hashable, Codable {
+    case time
+    case mass
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "TimeType": self = .time
+        case "MassType": self = .mass
+        default: self = .other(rawValue)
+        }
+    }
+    public var rawValue: String {
+        switch self {
+        case .time: "TimeType"
+        case .mass: "MassType"
+        case .other(let v): v
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(rawValue)
+    }
 }
 
 // MARK: - Settings & scheduling

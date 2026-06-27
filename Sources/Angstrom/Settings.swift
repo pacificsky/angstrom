@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Settings (GET /things/{serial}/settings)
 
 /// A machine's settings: connectivity, plumb-in, firmware, and auto-update.
-public struct MachineSettings: Sendable, Hashable, Decodable {
+public struct MachineSettings: Sendable, Hashable, Codable {
     /// Device identity carried at the top of the settings payload.
     public let machine: Machine
     public let wifiSSID: String?
@@ -35,9 +35,21 @@ public struct MachineSettings: Sendable, Hashable, Decodable {
         let firmwareEntries = (try? c.decode([Lenient<FirmwareInfo>].self, forKey: .actualFirmwares)) ?? []
         firmware = firmwareEntries.compactMap(\.value)
     }
+
+    public func encode(to encoder: Encoder) throws {
+        try machine.encode(to: encoder)
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(wifiSSID, forKey: .wifiSsid)
+        try c.encodeIfPresent(wifiRSSI, forKey: .wifiRssi)
+        try c.encode(isPlumbedIn, forKey: .isPlumbedIn)
+        try c.encode(plumbInSupported, forKey: .plumbInSupported)
+        try c.encode(autoUpdate, forKey: .autoUpdate)
+        try c.encode(autoUpdateSupported, forKey: .autoUpdateSupported)
+        try c.encode(firmware, forKey: .actualFirmwares)
+    }
 }
 
-public struct FirmwareInfo: Sendable, Hashable, Decodable {
+public struct FirmwareInfo: Sendable, Hashable, Codable {
     public let type: FirmwareType
     public let buildVersion: String
     public let changeLog: String?
@@ -46,7 +58,7 @@ public struct FirmwareInfo: Sendable, Hashable, Decodable {
     public let availableUpdate: FirmwareVersion?
 }
 
-public struct FirmwareVersion: Sendable, Hashable, Decodable {
+public struct FirmwareVersion: Sendable, Hashable, Codable {
     public let type: FirmwareType
     public let buildVersion: String
     public let changeLog: String?
@@ -57,7 +69,7 @@ public struct FirmwareVersion: Sendable, Hashable, Decodable {
 
 /// A machine's scheduling configuration: smart standby, wake-up schedules, and
 /// auto on/off times.
-public struct MachineSchedule: Sendable, Hashable, Decodable {
+public struct MachineSchedule: Sendable, Hashable, Codable {
     /// Device identity carried at the top of the scheduling payload.
     public let machine: Machine
     public let smartWakeUpSleep: SmartWakeUpSleep
@@ -91,9 +103,22 @@ public struct MachineSchedule: Sendable, Hashable, Decodable {
         autoOnOff = (try? c.decodeIfPresent(String.self, forKey: .autoOnOff)) ?? nil
         autoOnOffSupported = (try? c.decode(Bool.self, forKey: .autoOnOffSupported)) ?? false
     }
+
+    public func encode(to encoder: Encoder) throws {
+        try machine.encode(to: encoder)
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(smartWakeUpSleep, forKey: .smartWakeUpSleep)
+        try c.encode(smartWakeUpSleepSupported, forKey: .smartWakeUpSleepSupported)
+        try c.encodeIfPresent(smartStandby, forKey: .smartStandBy)
+        try c.encode(smartStandbySupported, forKey: .smartStandBySupported)
+        try c.encodeIfPresent(autoStandBy, forKey: .autoStandBy)
+        try c.encode(autoStandBySupported, forKey: .autoStandBySupported)
+        try c.encodeIfPresent(autoOnOff, forKey: .autoOnOff)
+        try c.encode(autoOnOffSupported, forKey: .autoOnOffSupported)
+    }
 }
 
-public struct SmartWakeUpSleep: Sendable, Hashable, Decodable {
+public struct SmartWakeUpSleep: Sendable, Hashable, Codable {
     public let smartStandbyEnabled: Bool
     public let smartStandbyMinutes: Int
     public let smartStandbyAfter: SmartStandbyAfter
@@ -129,7 +154,7 @@ public struct SmartWakeUpSleep: Sendable, Hashable, Decodable {
     }
 }
 
-public struct SmartStandby: Sendable, Hashable, Decodable {
+public struct SmartStandby: Sendable, Hashable, Codable {
     public let enabled: Bool
     public let minutes: Int
     public let after: SmartStandbyAfter
