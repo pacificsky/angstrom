@@ -22,28 +22,38 @@ final class MockBackend: @unchecked Sendable {
 
     private let lock = NSLock()
     private var handler: (@Sendable (URLRequest) -> Reply)?
-    private var requestPaths: [String] = []
+    private var requests: [(path: String, method: String, body: Data?)] = []
 
     func onRequest(_ handler: @escaping @Sendable (URLRequest) -> Reply) {
         lock.withLock { self.handler = handler }
     }
 
-    func reply(to request: URLRequest) -> Reply {
+    func reply(to request: URLRequest, body: Data?) -> Reply {
         let handler = lock.withLock { self.handler }
         // Compute the reply before recording, so a handler that inspects
         // `count(pathSuffix:)` sees only requests that preceded this one.
         let reply = handler?(request) ?? Reply(status: 500)
-        lock.withLock { requestPaths.append(request.url?.path ?? "") }
+        lock.withLock { requests.append((request.url?.path ?? "", request.httpMethod ?? "", body)) }
         return reply
     }
 
     /// Number of recorded requests whose path ends with `suffix`
     /// (paths are prefixed with `/api/customer-app`).
     func count(pathSuffix suffix: String) -> Int {
-        lock.withLock { requestPaths.filter { $0.hasSuffix(suffix) }.count }
+        lock.withLock { requests.filter { $0.path.hasSuffix(suffix) }.count }
     }
 
-    var recordedPaths: [String] { lock.withLock { requestPaths } }
+    /// The body of the last request whose path ends with `suffix`.
+    func body(pathSuffix suffix: String) -> Data? {
+        lock.withLock { requests.last { $0.path.hasSuffix(suffix) }?.body }
+    }
+
+    /// The HTTP method of the last request whose path ends with `suffix`.
+    func method(pathSuffix suffix: String) -> String? {
+        lock.withLock { requests.last { $0.path.hasSuffix(suffix) }?.method }
+    }
+
+    var recordedPaths: [String] { lock.withLock { requests.map(\.path) } }
 }
 
 /// A `URLProtocol` that serves responses from a ``MockBackend``, so the client
@@ -76,7 +86,7 @@ final class MockURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
-        let reply = backend.reply(to: request)
+        let reply = backend.reply(to: request, body: Self.readBody(request))
         guard let http = HTTPURLResponse(url: url, statusCode: reply.status,
                                          httpVersion: "HTTP/1.1", headerFields: nil) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
@@ -88,6 +98,24 @@ final class MockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    /// URLSession hands custom protocols the body as a stream, not `httpBody`.
+    private static func readBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let size = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: size)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data.isEmpty ? nil : data
+    }
 
     /// A `URLSession` whose requests route to `backend`.
     static func session(backend: MockBackend) -> URLSession {

@@ -258,12 +258,16 @@ public enum BackFlushStatus: String, Sendable, Hashable, Codable, CaseIterable {
 public enum DoseMode: Sendable, Hashable, Codable {
     case continuous
     case pulses
+    case dose1
+    case dose2
     case other(String)
 
     public init(rawValue: String) {
         switch rawValue {
         case "Continuous": self = .continuous
         case "PulsesType": self = .pulses
+        case "Dose1": self = .dose1
+        case "Dose2": self = .dose2
         default: self = .other(rawValue)
         }
     }
@@ -271,6 +275,8 @@ public enum DoseMode: Sendable, Hashable, Codable {
         switch self {
         case .continuous: "Continuous"
         case .pulses: "PulsesType"
+        case .dose1: "Dose1"
+        case .dose2: "Dose2"
         case .other(let v): v
         }
     }
@@ -282,7 +288,7 @@ public enum DoseMode: Sendable, Hashable, Codable {
     }
 }
 
-/// Which dose a setting applies to.
+/// Which dose a setting applies to (read side: dashboard dose widgets).
 public enum DoseIndex: String, Sendable, Hashable, Codable, CaseIterable {
     case continuous = "Continuous"
     case byGroup = "ByGroup"
@@ -290,6 +296,12 @@ public enum DoseIndex: String, Sendable, Hashable, Codable, CaseIterable {
     case doseB = "DoseB"
     case doseC = "DoseC"
     case doseD = "DoseD"
+}
+
+/// Dose-index domain accepted by the pre-extraction-times command (write side).
+public enum PreExtractionDoseIndex: String, Sendable, Hashable, Codable, CaseIterable {
+    case byGroup = "ByGroup"
+    case byDose = "ByDose"
 }
 
 // MARK: - Settings & scheduling

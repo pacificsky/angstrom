@@ -137,15 +137,6 @@ public actor LaMarzoccoCloudClient {
         }
     }
 
-    /// Turn the machine on (`BrewingMode`) or off (`StandBy`).
-    public func setPower(serial: String, on: Bool) async throws {
-        let body = ["mode": on ? "BrewingMode" : "StandBy"]
-        _ = try await authed(
-            path: "/things/\(serial)/command/CoffeeMachineChangeMode",
-            method: "POST", body: body
-        )
-    }
-
     // MARK: - Auth
 
     /// Register this installation's public key with the server (one-time).
@@ -235,20 +226,25 @@ public actor LaMarzoccoCloudClient {
 
     // MARK: - Plumbing
 
-    private func authed(path: String, method: String, body: [String: String]? = nil) async throws -> Data {
+    func authed(path: String, method: String, bodyData: Data? = nil) async throws -> Data {
         let bearer = try await accessToken()
         do {
-            return try await send(authedRequest(path: path, method: method, bearer: bearer, body: body))
+            return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData))
         } catch LaMarzoccoError.authenticationFailed {
             // Token rejected mid-flight. Invalidate it (unless another fetch has
             // already replaced it) and retry once with a fresh token.
             if token?.accessToken == bearer { token = nil }
             let retry = try await accessToken()
-            return try await send(authedRequest(path: path, method: method, bearer: retry, body: body))
+            return try await send(authedRequest(path: path, method: method, bearer: retry, bodyData: bodyData))
         }
     }
 
-    private func authedRequest(path: String, method: String, bearer: String, body: [String: String]?) throws -> URLRequest {
+    /// Encode an arbitrary JSON body and send an authenticated request.
+    func authedJSON(path: String, method: String, body: some Encodable & Sendable) async throws -> Data {
+        try await authed(path: path, method: method, bodyData: try JSONEncoder.laMarzocco().encode(body))
+    }
+
+    private func authedRequest(path: String, method: String, bearer: String, bodyData: Data?) throws -> URLRequest {
         var req = URLRequest(url: url(path))
         req.httpMethod = method
         req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
@@ -257,11 +253,32 @@ public actor LaMarzoccoCloudClient {
         }
         // Only body-carrying requests get a Content-Type, matching pylamarzocco
         // (aiohttp emits none for body-less GETs).
-        if let body {
+        if let bodyData {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            req.httpBody = bodyData
         }
         return req
+    }
+
+    /// POST a command and decode its immediate ``CommandResponse``.
+    ///
+    /// The cloud returns a one-element array; we decode `[0]`. When a websocket
+    /// is connected (M3) this is where we await the matching confirmation — with
+    /// no socket the command is fire-and-forget (per the two-tier design).
+    @discardableResult
+    func executeCommand(serial: String, _ command: String, body: some Encodable & Sendable) async throws -> CommandResponse {
+        let data = try await authedJSON(
+            path: "/things/\(serial)/command/\(command)", method: "POST", body: body)
+        let responses: [CommandResponse]
+        do {
+            responses = try JSONDecoder.laMarzocco().decode([CommandResponse].self, from: data)
+        } catch {
+            throw LaMarzoccoError.decoding("command \(command): \(error)")
+        }
+        guard let response = responses.first else {
+            throw LaMarzoccoError.decoding("command \(command): empty response")
+        }
+        return response
     }
 
     @discardableResult
