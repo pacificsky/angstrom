@@ -31,10 +31,19 @@ public actor LaMarzoccoCloudClient {
     private let session: URLSession
     private let log: (@Sendable (String) -> Void)?
 
-    private var accessToken: String?
-    private var refreshToken: String?
-    private var tokenExpiry: Date = .distantPast
+    private var token: AccessToken?
+    /// Coalesces concurrent token fetches: Swift actors are re-entrant across
+    /// `await`, so several authenticated calls can each observe a missing or
+    /// stale token at once. Routing every fetch through one in-flight `Task`
+    /// means they share a single sign-in/refresh instead of racing into
+    /// duplicate requests.
+    private var tokenTask: Task<AccessToken, Error>?
     private var registered: Bool
+
+    /// Clock driving token-expiry decisions. Overridable in tests via
+    /// ``setClockForTesting(_:)`` so the refresh path can be exercised without
+    /// waiting out a real token lifetime.
+    private var clock: @Sendable () -> Date = { Date() }
 
     /// Whether this installation has been registered with the server.
     /// Persist this so you don't re-register on every launch.
@@ -68,7 +77,7 @@ public actor LaMarzoccoCloudClient {
     /// Validate credentials, registering + signing in as needed, and return the
     /// machines on the account.
     public func connect() async throws -> [Machine] {
-        try await ensureToken()
+        _ = try await accessToken()
         let machines = try await self.machines()
         guard !machines.isEmpty else { throw LaMarzoccoError.noMachines }
         return machines
@@ -132,53 +141,103 @@ public actor LaMarzoccoCloudClient {
         registered = true
     }
 
-    private func signIn() async throws {
-        var req = URLRequest(url: url("/auth/signin"))
+    /// Return a valid bearer access token, signing in or refreshing as needed.
+    ///
+    /// Concurrent callers coalesce on ``tokenTask`` so only one sign-in/refresh
+    /// is ever in flight (the Swift-actor analogue of `pylamarzocco`'s
+    /// `asyncio.Lock` around token acquisition).
+    private func accessToken() async throws -> String {
+        if let tokenTask {
+            return try await tokenTask.value.accessToken
+        }
+        if let token, !token.needsRefresh(at: clock()) {
+            return token.accessToken
+        }
+        // `Task.init` inherits this actor's isolation, so the body's mutations
+        // of `token`/`tokenTask` stay actor-isolated. `tokenTask` is assigned
+        // before the first `await` below, so a re-entrant caller sees it.
+        let task = Task { () throws -> AccessToken in
+            defer { self.tokenTask = nil }
+            let fresh = try await self.fetchOrRefreshToken()
+            self.token = fresh
+            return fresh
+        }
+        tokenTask = task
+        return try await task.value.accessToken
+    }
+
+    /// Register first if needed, then refresh when we hold a still-valid token,
+    /// otherwise perform a full sign-in.
+    private func fetchOrRefreshToken() async throws -> AccessToken {
+        if !registered { try await register() }
+        if let token, !token.isExpired(at: clock()), !token.refreshToken.isEmpty {
+            do {
+                return try await requestToken(
+                    path: "/auth/refreshtoken",
+                    body: ["username": username, "refreshToken": token.refreshToken]
+                )
+            } catch LaMarzoccoError.authenticationFailed {
+                // Refresh token rejected — fall through to a full sign-in.
+            }
+        }
+        return try await requestToken(
+            path: "/auth/signin",
+            body: ["username": username, "password": password]
+        )
+    }
+
+    /// POST a credential or refresh body to an auth endpoint and decode the token.
+    private func requestToken(path: String, body: [String: String]) async throws -> AccessToken {
+        var req = URLRequest(url: url(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (k, v) in try Proof.requestHeaders(for: installationKey) {
             req.setValue(v, forHTTPHeaderField: k)
         }
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["username": username, "password": password])
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let data = try await send(req)
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = obj["accessToken"] as? String else {
             throw LaMarzoccoError.decoding("missing accessToken")
         }
-        accessToken = access
-        refreshToken = obj["refreshToken"] as? String
-        tokenExpiry = Date().addingTimeInterval(50 * 60) // tokens last ~1h
+        let refresh = obj["refreshToken"] as? String ?? ""
+        return AccessToken(accessToken: access, refreshToken: refresh, now: clock())
     }
 
-    private func ensureToken() async throws {
-        if !registered { try await register() }
-        if accessToken == nil || Date() >= tokenExpiry {
-            try await signIn()
-        }
+    /// Test seam: override the clock driving token-expiry decisions.
+    func setClockForTesting(_ clock: @escaping @Sendable () -> Date) {
+        self.clock = clock
     }
 
     // MARK: - Plumbing
 
     private func authed(path: String, method: String, body: [String: String]? = nil) async throws -> Data {
-        try await ensureToken()
+        let bearer = try await accessToken()
         do {
-            return try await send(authedRequest(path: path, method: method, body: body))
+            return try await send(authedRequest(path: path, method: method, bearer: bearer, body: body))
         } catch LaMarzoccoError.authenticationFailed {
-            try await signIn() // token may have expired early — retry once
-            return try await send(authedRequest(path: path, method: method, body: body))
+            // Token rejected mid-flight. Invalidate it (unless another fetch has
+            // already replaced it) and retry once with a fresh token.
+            if token?.accessToken == bearer { token = nil }
+            let retry = try await accessToken()
+            return try await send(authedRequest(path: path, method: method, bearer: retry, body: body))
         }
     }
 
-    private func authedRequest(path: String, method: String, body: [String: String]?) throws -> URLRequest {
+    private func authedRequest(path: String, method: String, bearer: String, body: [String: String]?) throws -> URLRequest {
         var req = URLRequest(url: url(path))
         req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let accessToken { req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization") }
+        req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         for (k, v) in try Proof.requestHeaders(for: installationKey) {
             req.setValue(v, forHTTPHeaderField: k)
         }
-        if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
+        // Only body-carrying requests get a Content-Type, matching pylamarzocco
+        // (aiohttp emits none for body-less GETs).
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         return req
     }
 
@@ -208,5 +267,37 @@ public actor LaMarzoccoCloudClient {
 
     private func url(_ path: String) -> URL {
         URL(string: "\(Self.baseURL)\(path)")!
+    }
+}
+
+// MARK: - Token
+
+/// An access/refresh token pair with a locally-computed expiry.
+///
+/// La Marzocco's token responses carry no explicit lifetime, so — matching the
+/// `pylamarzocco` reference — tokens are treated as valid for one hour from
+/// receipt and refreshed once within ``refreshWindow`` of expiry.
+struct AccessToken: Sendable {
+    /// Assumed token lifetime from receipt (the server states none).
+    static let lifetime: TimeInterval = 60 * 60
+    /// Refresh once the token is within this window of expiry.
+    static let refreshWindow: TimeInterval = 10 * 60
+
+    let accessToken: String
+    let refreshToken: String
+    let expiresAt: Date
+
+    init(accessToken: String, refreshToken: String, now: Date = Date()) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.expiresAt = now.addingTimeInterval(Self.lifetime)
+    }
+
+    /// Whether the token is past its assumed expiry (→ requires a full sign-in).
+    func isExpired(at now: Date = Date()) -> Bool { now >= expiresAt }
+
+    /// Whether the token is within the refresh window of expiry (or past it).
+    func needsRefresh(at now: Date = Date()) -> Bool {
+        now >= expiresAt.addingTimeInterval(-Self.refreshWindow)
     }
 }
