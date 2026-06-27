@@ -1,0 +1,154 @@
+name: Upstream drift check
+
+# Detect when pylamarzocco has published releases past the watermark recorded in
+# UPSTREAM.md, and open (or update) a single tracking issue. Read-only against
+# upstream; the only thing it writes is an issue in this repo.
+#
+# Optional Telegram ping on newly-discovered drift: set repo secrets
+# TELEGRAM_BOT_TOKEN (from @BotFather) and TELEGRAM_CHAT_ID (your chat id). If
+# either is unset the notification step is skipped — the issue is still created.
+
+on:
+  schedule:
+    - cron: "17 7 * * 1" # Mondays 07:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  UPSTREAM_REPO: zweckj/pylamarzocco
+  TRACKING_LABEL: upstream-sync
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check for upstream drift
+        id: drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # 1. Read the watermark from UPSTREAM.md.
+          base_sha=$(grep -oE 'upstream-sha: *[^ ]+' UPSTREAM.md | head -1 | awk '{print $2}')
+          base_ver=$(grep -oE 'upstream-version: *[^ ]+' UPSTREAM.md | head -1 | awk '{print $2}')
+          if [ -z "$base_sha" ] || [ -z "$base_ver" ]; then
+            echo "::error::Could not parse upstream-sha / upstream-version markers from UPSTREAM.md"
+            exit 1
+          fi
+          echo "Watermark: $base_ver ($base_sha)"
+
+          # 2. Latest upstream release.
+          latest_ver=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -z "$latest_ver" ]; then
+            echo "No latest release found upstream (or API unavailable); nothing to do."
+            exit 0
+          fi
+          echo "Latest upstream release: $latest_ver"
+
+          if [ "$latest_ver" = "$base_ver" ]; then
+            echo "Watermark matches latest release; no drift."
+            exit 0
+          fi
+
+          # 3. How far ahead, and what changed (cloud-relevant paths only).
+          cmp=$(gh api "repos/$UPSTREAM_REPO/compare/$base_sha...$latest_ver" 2>/dev/null || true)
+          if [ -z "$cmp" ]; then
+            echo "::warning::Could not compare $base_sha...$latest_ver; opening issue with version info only."
+            ahead="unknown number of"
+            commits=""
+          else
+            ahead=$(echo "$cmp" | jq -r '.ahead_by')
+            if [ "$ahead" = "0" ]; then
+              echo "Latest release tag differs but is not ahead of watermark; no drift."
+              exit 0
+            fi
+            commits=$(echo "$cmp" | jq -r '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:7] + ")"' | head -50)
+          fi
+
+          compare_url="https://github.com/$UPSTREAM_REPO/compare/$base_sha...$latest_ver"
+
+          # 4. Is this newly-discovered drift? Only notify when the latest release
+          #    differs from what an already-open issue last reported, so we don't
+          #    re-ping every week while the same drift sits unported.
+          gh label create "$TRACKING_LABEL" --color FBCA04 --description "pylamarzocco port is behind upstream" 2>/dev/null || true
+          existing=$(gh issue list --label "$TRACKING_LABEL" --state open --json number --jq '.[0].number // empty')
+          prev_latest=""
+          if [ -n "$existing" ]; then
+            prev_latest=$(gh issue view "$existing" --json body --jq .body \
+              | grep -oE 'reported-latest: *[^ ]+' | head -1 | awk '{print $2}' || true)
+          fi
+          if [ "$latest_ver" != "$prev_latest" ]; then notify=true; else notify=false; fi
+          echo "notify=$notify (prev_latest='$prev_latest', latest='$latest_ver')"
+
+          # 5. Build the issue body (the reported-latest marker drives step 4 next run).
+          body=$(cat <<EOF
+          \`pylamarzocco\` has published **$latest_ver**, past the porting watermark of **$base_ver** (\`$base_sha\`) recorded in [UPSTREAM.md]($REPO_URL/blob/main/UPSTREAM.md).
+
+          - **Ahead by:** $ahead commit(s)
+          - **Compare:** $compare_url
+
+          Follow the *Syncing to a newer upstream* runbook in UPSTREAM.md: review the diff, port cloud-relevant changes (skip Bluetooth-only), then bump the watermark markers in the same PR.
+
+          ### Commits since watermark
+          $commits
+
+          ---
+          _Opened automatically by \`.github/workflows/upstream-drift.yml\`. This issue is updated in place each run; close it once the watermark is advanced._
+          <!-- reported-latest: $latest_ver -->
+          EOF
+          )
+
+          title="Upstream pylamarzocco moved past $base_ver (latest: $latest_ver)"
+
+          # 6. Upsert the single tracking issue and capture its URL.
+          if [ -n "$existing" ]; then
+            echo "Updating existing tracking issue #$existing"
+            issue_url=$(gh issue edit "$existing" --title "$title" --body "$body")
+          else
+            echo "Opening new tracking issue"
+            issue_url=$(gh issue create --title "$title" --body "$body" --label "$TRACKING_LABEL")
+          fi
+
+          # 7. Hand off to the notification step.
+          {
+            echo "notify=$notify"
+            echo "base=$base_ver"
+            echo "latest=$latest_ver"
+            echo "ahead=$ahead"
+            echo "compare_url=$compare_url"
+            echo "issue_url=$issue_url"
+          } >> "$GITHUB_OUTPUT"
+
+      # Ping via Telegram only on newly-discovered drift. Skips silently if the
+      # TELEGRAM_* secrets aren't configured, so the workflow never fails on them.
+      - name: Notify via Telegram
+        if: steps.drift.outputs.notify == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BASE: ${{ steps.drift.outputs.base }}
+          LATEST: ${{ steps.drift.outputs.latest }}
+          AHEAD: ${{ steps.drift.outputs.ahead }}
+          COMPARE_URL: ${{ steps.drift.outputs.compare_url }}
+          ISSUE_URL: ${{ steps.drift.outputs.issue_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "::notice::TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set; skipping notification."
+            exit 0
+          fi
+          text=$(printf '\xF0\x9F\x94\x94 pylamarzocco released %s\nPort watermark is %s (ahead by %s commit(s)).\n\nIssue: %s\nCompare: %s' \
+            "$LATEST" "$BASE" "$AHEAD" "$ISSUE_URL" "$COMPARE_URL")
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            -o /dev/null
+          echo "Telegram notification sent."
