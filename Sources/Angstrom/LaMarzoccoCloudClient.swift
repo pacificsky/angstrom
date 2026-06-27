@@ -45,6 +45,29 @@ public actor LaMarzoccoCloudClient {
     /// waiting out a real token lifetime.
     private var clock: @Sendable () -> Date = { Date() }
 
+    /// Host for the websocket (no scheme/path).
+    static let webSocketHost = "lion.lamarzocco.io"
+
+    // MARK: WebSocket state
+    private var webSocketFactory: (@Sendable (URLRequest) -> any WebSocketChannel)?
+    private var channel: (any WebSocketChannel)?
+    private var subscriptionId: String?
+    private var maintenanceTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var manuallyDisconnected = false
+    private var firstConnect: CheckedContinuation<Void, Error>?
+    private var updateListeners: [UUID: AsyncStream<DashboardUpdate>.Continuation] = [:]
+    private var pendingCommands: [String: PendingCommand] = [:]
+    private var reconnectAttempt = 0
+
+    // Timings (overridable in tests via setWebSocketTimingForTesting).
+    private var commandTimeout: Duration = .seconds(10)
+    private var heartbeatInterval: Duration = .seconds(15)
+    private var reconnectBackoff: Duration = .seconds(2)
+
+    /// Whether the live websocket is currently connected.
+    public private(set) var isWebSocketConnected = false
+
     /// Whether this installation has been registered with the server.
     /// Persist this so you don't re-register on every launch.
     public var isRegistered: Bool { registered }
@@ -278,7 +301,18 @@ public actor LaMarzoccoCloudClient {
         guard let response = responses.first else {
             throw LaMarzoccoError.decoding("command \(command): empty response")
         }
-        return response
+        // Two-tier confirmation: with a live websocket, await the matching final
+        // result (up to 10s) and surface rejection/timeout; with no socket the
+        // command is fire-and-forget.
+        guard isWebSocketConnected else { return response }
+        guard let confirmation = await awaitConfirmation(id: response.id) else {
+            throw LaMarzoccoError.commandTimedOut
+        }
+        guard confirmation.status == .success else {
+            throw LaMarzoccoError.commandFailed(
+                status: confirmation.status.rawValue, errorCode: confirmation.errorCode)
+        }
+        return confirmation
     }
 
     @discardableResult
@@ -308,6 +342,217 @@ public actor LaMarzoccoCloudClient {
     private func url(_ path: String) -> URL {
         URL(string: "\(Self.baseURL)\(path)")!
     }
+
+    // MARK: - WebSocket
+
+    /// Open the live-status websocket for a machine and keep it connected
+    /// (auto-reconnecting) until ``disconnectWebSocket()``. Returns once the
+    /// first connection is established; throws if it cannot connect.
+    public func connectWebSocket(serial: String) async throws {
+        manuallyDisconnected = false
+        guard maintenanceTask == nil else { return }
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            firstConnect = cont
+            maintenanceTask = Task { await self.maintainConnection(serial: serial) }
+        }
+    }
+
+    /// Disconnect the websocket and stop reconnecting.
+    public func disconnectWebSocket() async {
+        manuallyDisconnected = true
+        // Unblock a caller still awaiting the initial handshake.
+        if let cont = firstConnect { firstConnect = nil; cont.resume(throwing: CancellationError()) }
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+        await teardownConnection()
+        for listener in updateListeners.values { listener.finish() }
+        updateListeners.removeAll()
+    }
+
+    /// Test seam: shrink the websocket timings so reconnect/heartbeat/timeout
+    /// paths run fast and deterministically.
+    func setWebSocketTimingForTesting(commandTimeout: Duration, heartbeatInterval: Duration, reconnectBackoff: Duration) {
+        self.commandTimeout = commandTimeout
+        self.heartbeatInterval = heartbeatInterval
+        self.reconnectBackoff = reconnectBackoff
+    }
+
+    /// A stream of dashboard updates pushed over the websocket. Each call returns
+    /// an independent stream; all registered streams receive every update.
+    public func dashboardUpdates() -> AsyncStream<DashboardUpdate> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<DashboardUpdate>.makeStream()
+        updateListeners[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeListener(id) }
+        }
+        return stream
+    }
+
+    private func removeListener(_ id: UUID) { updateListeners[id] = nil }
+
+    /// Test seam: inject a websocket channel factory.
+    func setWebSocketFactoryForTesting(_ factory: @escaping @Sendable (URLRequest) -> any WebSocketChannel) {
+        webSocketFactory = factory
+    }
+
+    // MARK: WebSocket internals
+
+    private func maintainConnection(serial: String) async {
+        defer { maintenanceTask = nil } // clear on every exit so connectWebSocket() can retry
+        while !manuallyDisconnected {
+            do {
+                try await openAndRun(serial: serial)
+            } catch is CancellationError {
+                break
+            } catch {
+                if let cont = firstConnect {
+                    // Initial connection failed: surface to connectWebSocket() and stop.
+                    firstConnect = nil
+                    cont.resume(throwing: error)
+                    return
+                }
+                log?("websocket dropped: \(error.localizedDescription)")
+            }
+            if manuallyDisconnected { break }
+            reconnectAttempt += 1
+            try? await Task.sleep(for: min(.seconds(30), reconnectBackoff * reconnectAttempt))
+        }
+        await teardownConnection()
+    }
+
+    private func openAndRun(serial: String) async throws {
+        let token = try await accessToken()
+        let channel = makeChannel(request: webSocketRequest())
+        // Store immediately so disconnect/teardown can close a hung handshake,
+        // and so any handshake-phase throw still closes the socket via the defer.
+        self.channel = channel
+        defer {
+            isWebSocketConnected = false
+            stopHeartbeat()
+            channel.close()
+            if self.channel === channel { self.channel = nil; self.subscriptionId = nil }
+        }
+
+        try await channel.send(Stomp.encode(.connect, headers: [
+            ("host", Self.webSocketHost),
+            ("accept-version", "1.2,1.1,1.0"),
+            ("heart-beat", "0,0"),
+            ("Authorization", "Bearer \(token)"),
+        ]))
+        guard let connected = Stomp.decode(try await channel.receive()),
+              connected.command == Stomp.Command.connected.rawValue else {
+            throw LaMarzoccoError.webSocket("expected CONNECTED frame")
+        }
+
+        let subscription = UUID().uuidString
+        try await channel.send(Stomp.encode(.subscribe, headers: [
+            ("destination", "/ws/sn/\(serial)/dashboard"),
+            ("ack", "auto"),
+            ("id", subscription),
+            ("content-length", "0"),
+        ]))
+
+        self.subscriptionId = subscription
+        isWebSocketConnected = true
+        reconnectAttempt = 0 // a successful (re)connection resets the backoff
+        if let cont = firstConnect { firstConnect = nil; cont.resume() }
+        startHeartbeat()
+
+        while true {
+            handleFrame(try await channel.receive())
+        }
+    }
+
+    private func handleFrame(_ raw: String) {
+        guard let frame = Stomp.decode(raw) else { return }
+        switch frame.command {
+        case Stomp.Command.message.rawValue:
+            guard let body = frame.body,
+                  let update = try? JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(body.utf8))
+            else { return }
+            for command in update.commands { resolveCommand(command) }
+            for listener in updateListeners.values { listener.yield(update) }
+        case Stomp.Command.error.rawValue:
+            log?("websocket ERROR frame: \(frame.body ?? "")")
+        default:
+            break
+        }
+    }
+
+    private func teardownConnection() async {
+        stopHeartbeat()
+        if let channel, let subscriptionId {
+            try? await channel.send(Stomp.encode(.unsubscribe, headers: [("id", subscriptionId)]))
+        }
+        channel?.close()
+        channel = nil
+        subscriptionId = nil
+        isWebSocketConnected = false
+        // Fail any in-flight command awaits so callers don't hang.
+        let pending = pendingCommands
+        pendingCommands.removeAll()
+        for (_, command) in pending {
+            command.timeoutTask?.cancel()
+            command.continuation.resume(returning: nil)
+        }
+    }
+
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        let interval = heartbeatInterval
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                if Task.isCancelled { return }
+                await self?.pingChannel()
+            }
+        }
+    }
+    private func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+    private func pingChannel() async { try? await channel?.sendPing() }
+
+    private func awaitConfirmation(id: String) async -> CommandResponse? {
+        let timeoutDuration = commandTimeout
+        return await withCheckedContinuation { (cont: CheckedContinuation<CommandResponse?, Never>) in
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(for: timeoutDuration)
+                await self?.timeoutCommand(id: id)
+            }
+            pendingCommands[id] = PendingCommand(continuation: cont, timeoutTask: timeout)
+        }
+    }
+    private func resolveCommand(_ response: CommandResponse) {
+        guard let pending = pendingCommands.removeValue(forKey: response.id) else { return }
+        pending.timeoutTask?.cancel()
+        pending.continuation.resume(returning: response)
+    }
+    private func timeoutCommand(id: String) {
+        guard let pending = pendingCommands.removeValue(forKey: id) else { return }
+        pending.continuation.resume(returning: nil)
+    }
+
+    private func makeChannel(request: URLRequest) -> any WebSocketChannel {
+        if let webSocketFactory { return webSocketFactory(request) }
+        return URLSessionWebSocketChannel(task: session.webSocketTask(with: request))
+    }
+
+    private func webSocketRequest() -> URLRequest {
+        var req = URLRequest(url: URL(string: "wss://\(Self.webSocketHost)/ws/connect")!)
+        if let headers = try? Proof.requestHeaders(for: installationKey) {
+            for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        }
+        return req
+    }
+}
+
+/// An in-flight command awaiting websocket confirmation.
+private struct PendingCommand {
+    let continuation: CheckedContinuation<CommandResponse?, Never>
+    let timeoutTask: Task<Void, Never>?
 }
 
 // MARK: - Token

@@ -116,6 +116,12 @@ public enum LaMarzoccoError: Error, Sendable, Equatable {
     case decoding(String)
     /// The account has no machines.
     case noMachines
+    /// A websocket connection or protocol error.
+    case webSocket(String)
+    /// A command was accepted but the machine didn't confirm it in time.
+    case commandTimedOut
+    /// The machine reported a command as failed.
+    case commandFailed(status: String, errorCode: String?)
 }
 
 extension LaMarzoccoError: LocalizedError {
@@ -133,6 +139,12 @@ extension LaMarzoccoError: LocalizedError {
             return "Unexpected response: \(message)"
         case .noMachines:
             return "No machines found on this account."
+        case .webSocket(let message):
+            return "Live-update connection error: \(message)"
+        case .commandTimedOut:
+            return "The machine did not confirm the command in time."
+        case .commandFailed(let status, let errorCode):
+            return "The machine rejected the command (\(status)\(errorCode.map { ", \($0)" } ?? ""))."
         }
     }
 }
