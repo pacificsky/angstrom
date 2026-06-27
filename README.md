@@ -1,6 +1,10 @@
 # Angstrom
 
+[![Docs](https://img.shields.io/badge/docs-DocC-blue)](https://pacificsky.github.io/angstrom/documentation/angstrom/)
+
 A Swift library for the **La Marzocco** cloud API, for iOS and macOS.
+
+📖 **[API documentation](https://pacificsky.github.io/angstrom/documentation/angstrom/)** — generated with DocC, hosted on GitHub Pages.
 
 Angstrom borrows heavily from [`pylamarzocco`](https://github.com/zweckj/pylamarzocco)
 by **Josef Zweck** — the Python library behind the Home Assistant La Marzocco

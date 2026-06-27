@@ -1,0 +1,60 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the workflow to publish to GitHub Pages via the deploy-pages action.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; let an in-progress run finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pin the newest installed Xcode so the SDK matches the package's
+      # deployment targets (mirrors ci.yml).
+      - name: Select latest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
+          swift --version
+
+      # Build one combined DocC archive containing both products, transformed
+      # for static hosting under the repo's Pages base path (/angstrom/).
+      - name: Generate documentation
+        run: |
+          swift package --allow-writing-to-directory "$RUNNER_TEMP/docs" \
+            generate-documentation \
+            --target Angstrom \
+            --target AngstromUI \
+            --enable-experimental-combined-documentation \
+            --disable-indexing \
+            --transform-for-static-hosting \
+            --hosting-base-path angstrom \
+            --output-path "$RUNNER_TEMP/docs"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
