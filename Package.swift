@@ -9,12 +9,19 @@ let package = Package(
     ],
     products: [
         .library(name: "Angstrom", targets: ["Angstrom"]),
+        .library(name: "AngstromUI", targets: ["AngstromUI"]),
     ],
     targets: [
         .target(name: "Angstrom"),
+        .target(name: "AngstromUI", dependencies: ["Angstrom"]),
         .testTarget(
             name: "AngstromTests",
             dependencies: ["Angstrom"],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "AngstromUITests",
+            dependencies: ["AngstromUI"],
             resources: [.copy("Fixtures")]
         ),
     ]

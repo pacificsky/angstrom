@@ -4,12 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Angstrom is a Swift Package Manager library (macOS 13+ / iOS 16+, Swift 6 with strict
+Angstrom is a Swift Package Manager library (macOS 14+ / iOS 17+, Swift 6 with strict
 concurrency) for the **La Marzocco** customer-app cloud API. It is an independent Swift
 port of the cloud protocol and authentication from
 [`pylamarzocco`](https://github.com/zweckj/pylamarzocco) (Josef Zweck). When changing
-auth or proof logic, the Python source (`util/_authentication.py`) is the reference of
-record — match it byte-for-byte.
+auth, proof, or any wire-shape/decoding logic, the Python source is the reference of
+record — match it. (Bluetooth is explicitly out of scope; cloud only.)
+
+Two products: **`Angstrom`** — the stateless `actor` core (transport/protocol/typed
+reads/commands/websocket), usable standalone by CLI/server consumers — and **`AngstromUI`**
+— an optional `@MainActor @Observable` device layer on top for SwiftUI.
 
 ## Commands
 
@@ -25,7 +29,7 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
 
 ## Architecture
 
-Four files in `Sources/Angstrom/`, layered from crypto identity up to the public client:
+### `Sources/Angstrom/` — the stateless core
 
 - **`InstallationKey.swift`** — the per-install cryptographic identity. A `Codable`/`Sendable`
   value type storing only the installation UUID and the raw 32-byte P-256 private-key
@@ -34,24 +38,43 @@ Four files in `Sources/Angstrom/`, layered from crypto identity up to the public
   persist it, and pass it back each launch.
 
 - **`Proof.swift`** — La Marzocco's bespoke request-proof scheme. `requestProof` is a hand
-  ported byte-mutation loop (XOR + rotate-left within a byte) over the input string,
-  finalized as `base64(sha256(work))`. `requestHeaders` builds the signed headers
-  (`X-App-Installation-Id`, `X-Timestamp`, `X-Nonce`, `X-Request-Signature`) carried on
-  signin and every authed request. This is the most fragile code in the repo — it is
-  verified against fixed vectors in `ProofTests`.
+  ported byte-mutation loop (XOR + rotate-left within a byte), finalized as
+  `base64(sha256(work))`. `requestHeaders` builds the signed headers carried on signin and
+  every authed request. The most fragile code in the repo — verified against fixed vectors
+  in `ProofTests`.
 
-- **`LaMarzoccoCloudClient.swift`** — the public `actor`. Owns the URLSession and the
-  in-memory token lifecycle. Tokens live only in memory and are **never persisted** — the
-  client deliberately touches no disk; persisting `installationKey` + `isRegistered` is the
-  caller's job. Auth flow: `ensureToken()` registers the key once (`/auth/init`) if
-  `!registered`, then signs in (`/auth/signin`) if the token is missing/expired (assumed
-  ~1h, refreshed at 50min). `authed(...)` wraps every endpoint call and retries signin once
-  on a 401. Power state is read by scanning the dashboard JSON for the `CMMachineStatus`
-  widget rather than a typed decode; `setPower` POSTs the `CoffeeMachineChangeMode` command.
+- **`LaMarzoccoCloudClient.swift`** — the public `actor`. Owns the URLSession, the in-memory
+  token lifecycle (refresh via `/auth/refreshtoken`, coalesced through one in-flight
+  `tokenTask`), the typed reads (`machines`/`dashboard`/`settings`/`schedule`/`statistics`),
+  `executeCommand` (two-tier: awaits websocket confirmation when connected, else
+  fire-and-forget), and the STOMP websocket (connect/subscribe/heartbeat/reconnect →
+  `AsyncStream<DashboardUpdate>`). Tokens are **never persisted** — persisting
+  `installationKey` + `isRegistered` is the caller's job.
 
-- **`Models.swift`** — `Machine`, the `PowerState` enum, and `LaMarzoccoError`
-  (`LocalizedError` with user-facing strings). `Machine`'s custom decoder tolerates missing
-  `name`/`modelName`.
+- **`Models.swift`** — `Machine`, `PowerState`, `LaMarzoccoError` (`LocalizedError`).
+- **`Enums.swift`** — `Model`/`DeviceType` + machine/dose/boiler/grinder enums, the
+  `JSONDecoder/Encoder.laMarzocco()` (ms-epoch) factories, and the `Lenient<T>` skip-on-fail wrapper.
+- **`Widgets.swift`** — `Dashboard` + the `Widget`/`WidgetKind` discriminated union (keyed on
+  widget `code`, demotes unknown/undecodable widgets to `.unknown`) + every payload struct
+  (incl. grinder widgets). All payloads are `Codable` so a `Dashboard` round-trips for snapshots.
+- **`Settings.swift`** — `MachineSettings`, `MachineSchedule`, `WakeUpSchedule`, firmware.
+- **`Commands.swift`** — `CommandResponse`/`CommandStatus` + the command methods + firmware.
+- **`Statistics.swift`** — `ThingStatistics` + the `StatWidget` union and `/stats` endpoints.
+- **`Stomp.swift` / `WebSocket.swift`** — STOMP codec; `WebSocketChannel` seam,
+  `DashboardUpdate`, and `Dashboard.applying(_:)` merge.
+- **`Optimistic.swift`** — pure `Dashboard.replacing(_:)` + `setting…(_:)` transforms used by
+  the device layer for optimistic updates.
+
+### `Sources/AngstromUI/` — the observable device layer
+
+- **`LaMarzoccoMachine.swift`** — `@MainActor @Observable`. Retains `dashboard`/`settings`/
+  `schedule`/`statistics`, refreshes-and-stores, iterates the websocket `AsyncStream` (merging
+  into `dashboard`), forwards commands with optimistic local updates, and gates model-specific
+  commands (`LaMarzoccoError.unsupportedModel`). `isLive` tracks the *subscription* (start→stop),
+  `lastError` is cleared on the next success.
+- **`MachineSnapshot.swift`** — `Codable {serialNumber, dashboard?, settings?, schedule?}` for
+  stale-on-launch UI (recognized widgets round-trip losslessly; unknown widgets keep code/index
+  but lose their raw payload).
 
 ### Conventions worth keeping
 
@@ -64,6 +87,7 @@ Four files in `Sources/Angstrom/`, layered from crypto identity up to the public
 
 ## Status
 
-v0.1 covers authentication, listing machines, reading power state, and on/off. Live-status
-websocket, more commands, and Bluetooth are possible future additions from the
-`pylamarzocco` surface.
+v1.0 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
+typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
+confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
+observable device layer. Bluetooth remains out of scope.
