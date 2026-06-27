@@ -1,0 +1,101 @@
+name: Upstream drift check
+
+# Detect when pylamarzocco has published releases past the watermark recorded in
+# UPSTREAM.md, and open (or update) a single tracking issue. Read-only against
+# upstream; the only thing it writes is an issue in this repo.
+
+on:
+  schedule:
+    - cron: "17 7 * * 1" # Mondays 07:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  UPSTREAM_REPO: zweckj/pylamarzocco
+  TRACKING_LABEL: upstream-sync
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check for upstream drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # 1. Read the watermark from UPSTREAM.md.
+          base_sha=$(grep -oE 'upstream-sha: *[^ ]+' UPSTREAM.md | head -1 | awk '{print $2}')
+          base_ver=$(grep -oE 'upstream-version: *[^ ]+' UPSTREAM.md | head -1 | awk '{print $2}')
+          if [ -z "$base_sha" ] || [ -z "$base_ver" ]; then
+            echo "::error::Could not parse upstream-sha / upstream-version markers from UPSTREAM.md"
+            exit 1
+          fi
+          echo "Watermark: $base_ver ($base_sha)"
+
+          # 2. Latest upstream release.
+          latest_ver=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -z "$latest_ver" ]; then
+            echo "No latest release found upstream (or API unavailable); nothing to do."
+            exit 0
+          fi
+          echo "Latest upstream release: $latest_ver"
+
+          if [ "$latest_ver" = "$base_ver" ]; then
+            echo "Watermark matches latest release; no drift."
+            exit 0
+          fi
+
+          # 3. How far ahead, and what changed (cloud-relevant paths only).
+          cmp=$(gh api "repos/$UPSTREAM_REPO/compare/$base_sha...$latest_ver" 2>/dev/null || true)
+          if [ -z "$cmp" ]; then
+            echo "::warning::Could not compare $base_sha...$latest_ver; opening issue with version info only."
+            ahead="unknown number of"
+            commits=""
+          else
+            ahead=$(echo "$cmp" | jq -r '.ahead_by')
+            if [ "$ahead" = "0" ]; then
+              echo "Latest release tag differs but is not ahead of watermark; no drift."
+              exit 0
+            fi
+            commits=$(echo "$cmp" | jq -r '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:7] + ")"' | head -50)
+          fi
+
+          compare_url="https://github.com/$UPSTREAM_REPO/compare/$base_sha...$latest_ver"
+
+          # 4. Build the issue body.
+          body=$(cat <<EOF
+          \`pylamarzocco\` has published **$latest_ver**, past the porting watermark of **$base_ver** (\`$base_sha\`) recorded in [UPSTREAM.md]($REPO_URL/blob/main/UPSTREAM.md).
+
+          - **Ahead by:** $ahead commit(s)
+          - **Compare:** $compare_url
+
+          Follow the *Syncing to a newer upstream* runbook in UPSTREAM.md: review the diff, port cloud-relevant changes (skip Bluetooth-only), then bump the watermark markers in the same PR.
+
+          ### Commits since watermark
+          $commits
+
+          ---
+          _Opened automatically by \`.github/workflows/upstream-drift.yml\`. This issue is updated in place each run; close it once the watermark is advanced._
+          EOF
+          )
+
+          title="Upstream pylamarzocco moved past $base_ver (latest: $latest_ver)"
+
+          # 5. Ensure the tracking label exists, then upsert a single issue.
+          gh label create "$TRACKING_LABEL" --color FBCA04 --description "pylamarzocco port is behind upstream" 2>/dev/null || true
+
+          existing=$(gh issue list --label "$TRACKING_LABEL" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updating existing tracking issue #$existing"
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            echo "Opening new tracking issue"
+            gh issue create --title "$title" --body "$body" --label "$TRACKING_LABEL"
+          fi

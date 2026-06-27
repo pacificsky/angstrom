@@ -11,6 +11,12 @@ port of the cloud protocol and authentication from
 auth, proof, or any wire-shape/decoding logic, the Python source is the reference of
 record — match it. (Bluetooth is explicitly out of scope; cloud only.)
 
+**Porting watermark:** [`UPSTREAM.md`](UPSTREAM.md) records the exact `pylamarzocco`
+version + commit the port has been carried to. When porting newer upstream changes,
+follow its "Syncing to a newer upstream" runbook and **bump the watermark markers in
+the same PR**. A weekly CI job (`.github/workflows/upstream-drift.yml`) opens a
+tracking issue when upstream moves past the watermark.
+
 Two products: **`Angstrom`** — the stateless `actor` core (transport/protocol/typed
 reads/commands/websocket), usable standalone by CLI/server consumers — and **`AngstromUI`**
 — an optional `@MainActor @Observable` device layer on top for SwiftUI.
