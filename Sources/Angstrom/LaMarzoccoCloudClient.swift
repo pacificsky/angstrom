@@ -89,29 +89,52 @@ public actor LaMarzoccoCloudClient {
     public func machines() async throws -> [Machine] {
         let data = try await authed(path: "/things", method: "GET")
         do {
-            return try JSONDecoder().decode([Machine].self, from: data)
+            return try JSONDecoder.laMarzocco().decode([Machine].self, from: data)
         } catch {
             throw LaMarzoccoError.decoding("things: \(error.localizedDescription)")
         }
     }
 
-    /// Read the current power state of a machine.
-    public func powerState(serial: String) async throws -> PowerState {
+    /// Fetch and decode a machine's full dashboard (identity + typed widgets).
+    public func dashboard(serial: String) async throws -> Dashboard {
         let data = try await authed(path: "/things/\(serial)/dashboard", method: "GET")
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let widgets = obj["widgets"] as? [[String: Any]] else {
-            throw LaMarzoccoError.decoding("dashboard shape")
+        do {
+            return try JSONDecoder.laMarzocco().decode(Dashboard.self, from: data)
+        } catch {
+            throw LaMarzoccoError.decoding("dashboard: \(error)")
         }
-        for widget in widgets where (widget["code"] as? String) == "CMMachineStatus" {
-            let output = widget["output"] as? [String: Any]
-            switch output?["mode"] as? String {
-            case "BrewingMode": return .on
-            case "StandBy": return .off
-            case let other?: return .other(other)
-            default: return .unknown
-            }
+    }
+
+    /// Fetch and decode a machine's settings (wifi, plumb-in, firmware).
+    public func settings(serial: String) async throws -> MachineSettings {
+        let data = try await authed(path: "/things/\(serial)/settings", method: "GET")
+        do {
+            return try JSONDecoder.laMarzocco().decode(MachineSettings.self, from: data)
+        } catch {
+            throw LaMarzoccoError.decoding("settings: \(error)")
         }
-        return .unknown
+    }
+
+    /// Fetch and decode a machine's scheduling settings (smart standby, wake-ups).
+    public func schedule(serial: String) async throws -> MachineSchedule {
+        let data = try await authed(path: "/things/\(serial)/scheduling", method: "GET")
+        do {
+            return try JSONDecoder.laMarzocco().decode(MachineSchedule.self, from: data)
+        } catch {
+            throw LaMarzoccoError.decoding("scheduling: \(error)")
+        }
+    }
+
+    /// Read the current power state of a machine.
+    ///
+    /// A convenience over ``dashboard(serial:)`` / ``Dashboard/machineStatus``.
+    public func powerState(serial: String) async throws -> PowerState {
+        switch try await dashboard(serial: serial).machineStatus?.mode {
+        case .brewing: return .on
+        case .standby: return .off
+        case .none: return .unknown
+        case .some(let mode): return .other(mode.rawValue)
+        }
     }
 
     /// Turn the machine on (`BrewingMode`) or off (`StandBy`).
