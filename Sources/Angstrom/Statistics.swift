@@ -10,9 +10,13 @@ public struct ThingStatistics: Sendable, Hashable, Decodable {
     public let machine: Machine
     /// Firmware summary string the stats payload carries (often `nil`).
     public let firmwares: String?
-    /// Stat widget codes the account has selected for display.
+    /// Stat widget codes the account has selected for display. Kept as raw
+    /// strings (not filtered to a known enum): unlike pylamarzocco, which types
+    /// these as `WidgetType` and discards unrecognized codes, this preserves
+    /// every code the cloud reports so a newly-added widget type isn't dropped.
     public let selectedWidgetCodes: [String]
-    /// All stat widget codes available for this machine.
+    /// All stat widget codes available for this machine (raw, unfiltered — see
+    /// ``selectedWidgetCodes``).
     public let allWidgetCodes: [String]
     /// The selected stat widgets, decoded.
     public let widgets: [StatWidget]

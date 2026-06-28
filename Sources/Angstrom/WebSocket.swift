@@ -88,6 +88,14 @@ extension Dashboard {
     /// Return a new dashboard with `update` applied: widgets are replaced by
     /// `(code, index)`, removed widgets are dropped, and new widgets appended —
     /// preserving existing order. The machine identity is retained.
+    ///
+    /// This **intentionally diverges** from pylamarzocco's
+    /// `_websocket_dashboard_update_received`, which replaces the widget set
+    /// wholesale (`self.dashboard.widgets = config.widgets`) and ignores
+    /// `removedWidgets`. That relies on every push being a complete snapshot; the
+    /// incremental merge here honors the protocol's explicit `removedWidgets`
+    /// envelope and tolerates a partial frame without dropping widgets the push
+    /// didn't mention. Both behave identically on a full-snapshot push.
     public func applying(_ update: DashboardUpdate) -> Dashboard {
         func key(_ widget: Widget) -> String { "\(widget.code)#\(widget.index)" }
 

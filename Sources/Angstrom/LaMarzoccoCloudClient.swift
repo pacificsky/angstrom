@@ -275,7 +275,10 @@ public actor LaMarzoccoCloudClient {
             return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData))
         } catch LaMarzoccoError.authenticationFailed {
             // Token rejected mid-flight. Invalidate it (unless another fetch has
-            // already replaced it) and retry once with a fresh token.
+            // already replaced it) and retry once with a fresh token. This is
+            // deliberately more forgiving than pylamarzocco, which surfaces the
+            // 401 immediately: a 401 means the request was *not* applied, so even
+            // a non-idempotent command POST is safe to re-send once.
             if token?.accessToken == bearer { token = nil }
             let retry = try await accessToken()
             return try await send(authedRequest(path: path, method: method, bearer: retry, bodyData: bodyData))
