@@ -310,14 +310,76 @@ public struct RinseFlush: Sendable, Hashable, Codable {
 // MARK: - Doses
 
 public struct GroupDoses: Sendable, Hashable, Codable {
-    public let mode: DoseMode?
-    public let availableModes: [DoseMode]?
+    public let availableModes: [DoseMode]
+    /// Delivery mode. Defaults to ``DoseMode/pulses`` when the key is absent,
+    /// matching pylamarzocco's `GroupDosesSettings.mode` default of `PulsesType`.
+    public let mode: DoseMode
     public let doses: DosePulses
+    public let profile: String?
+    /// Whether this group can mirror group 1's settings, and its current target.
+    public let mirrorWithGroup1Supported: Bool
+    public let mirrorWithGroup1: String?
+    public let mirrorWithGroup1NotEffective: Bool
+    /// Continuous-dose capability/value.
+    public let continuousDoseSupported: Bool
+    public let continuousDose: String?
+    /// Brewing-pressure capability/value.
+    public let brewingPressureSupported: Bool
+    public let brewingPressure: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case availableModes, mode, doses, profile
+        case mirrorWithGroup1Supported, mirrorWithGroup1, mirrorWithGroup1NotEffective
+        case continuousDoseSupported, continuousDose, brewingPressureSupported, brewingPressure
+    }
+
+    public init(
+        availableModes: [DoseMode] = [],
+        mode: DoseMode = .pulses,
+        doses: DosePulses,
+        profile: String? = nil,
+        mirrorWithGroup1Supported: Bool = false,
+        mirrorWithGroup1: String? = nil,
+        mirrorWithGroup1NotEffective: Bool = false,
+        continuousDoseSupported: Bool = false,
+        continuousDose: String? = nil,
+        brewingPressureSupported: Bool = false,
+        brewingPressure: String? = nil
+    ) {
+        self.availableModes = availableModes
+        self.mode = mode
+        self.doses = doses
+        self.profile = profile
+        self.mirrorWithGroup1Supported = mirrorWithGroup1Supported
+        self.mirrorWithGroup1 = mirrorWithGroup1
+        self.mirrorWithGroup1NotEffective = mirrorWithGroup1NotEffective
+        self.continuousDoseSupported = continuousDoseSupported
+        self.continuousDose = continuousDose
+        self.brewingPressureSupported = brewingPressureSupported
+        self.brewingPressure = brewingPressure
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        availableModes = (try? c.decode([DoseMode].self, forKey: .availableModes)) ?? []
+        mode = (try? c.decode(DoseMode.self, forKey: .mode)) ?? .pulses
+        doses = (try? c.decode(DosePulses.self, forKey: .doses)) ?? DosePulses()
+        profile = (try? c.decodeIfPresent(String.self, forKey: .profile)) ?? nil
+        mirrorWithGroup1Supported = (try? c.decode(Bool.self, forKey: .mirrorWithGroup1Supported)) ?? false
+        mirrorWithGroup1 = (try? c.decodeIfPresent(String.self, forKey: .mirrorWithGroup1)) ?? nil
+        mirrorWithGroup1NotEffective = (try? c.decode(Bool.self, forKey: .mirrorWithGroup1NotEffective)) ?? false
+        continuousDoseSupported = (try? c.decode(Bool.self, forKey: .continuousDoseSupported)) ?? false
+        continuousDose = (try? c.decodeIfPresent(String.self, forKey: .continuousDose)) ?? nil
+        brewingPressureSupported = (try? c.decode(Bool.self, forKey: .brewingPressureSupported)) ?? false
+        brewingPressure = (try? c.decodeIfPresent(String.self, forKey: .brewingPressure)) ?? nil
+    }
 }
 
 public struct DosePulses: Sendable, Hashable, Codable {
     public let pulsesType: [DoseSetting]
     private enum CodingKeys: String, CodingKey { case pulsesType = "PulsesType" }
+
+    public init(pulsesType: [DoseSetting] = []) { self.pulsesType = pulsesType }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

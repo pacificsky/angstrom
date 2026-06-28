@@ -194,6 +194,54 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(d.unknownWidgetCodes, [])
         XCTAssertEqual(d.hotWaterDose?.doses, [])
         XCTAssertEqual(d.groupDoses?.doses.pulsesType, [])
+        // mode is absent in the payload → defaults to PulsesType (parity with
+        // pylamarzocco's GroupDosesSettings.mode default).
+        XCTAssertEqual(d.groupDoses?.mode, .pulses)
+    }
+
+    func testGroupDosesModelsAllFields() throws {
+        // The GS3 group-dose widget carries the mirror/continuous/pressure fields
+        // that used to be silently dropped.
+        let g = try XCTUnwrap(try dashboard("dashboard_gs3av").groupDoses)
+        XCTAssertEqual(g.mode, .pulses)
+        XCTAssertEqual(g.availableModes, [.pulses])
+        XCTAssertFalse(g.mirrorWithGroup1Supported)
+        XCTAssertNil(g.mirrorWithGroup1)
+        XCTAssertFalse(g.mirrorWithGroup1NotEffective)
+        XCTAssertNil(g.profile)
+        XCTAssertFalse(g.continuousDoseSupported)
+        XCTAssertNil(g.continuousDose)
+        XCTAssertFalse(g.brewingPressureSupported)
+        XCTAssertNil(g.brewingPressure)
+        XCTAssertEqual(g.doses.pulsesType.count, 4)
+    }
+
+    func testMachineOfflineModeAndCoffeeStationDecode() throws {
+        let json = """
+        { "serialNumber": "SN9", "modelName": "Linea Mini", "offlineMode": true,
+          "coffeeStation": { "id": "cs1", "name": "My station",
+            "accessories": [
+              { "type": "ScaleAcaiaLunar", "name": "LMZ-1", "connected": false, "batteryLevel": null, "imageUrl": null }
+            ] } }
+        """
+        let m = try JSONDecoder.laMarzocco().decode(Machine.self, from: Data(json.utf8))
+        XCTAssertTrue(m.offlineMode)
+        XCTAssertEqual(m.coffeeStation?.id, "cs1")
+        XCTAssertEqual(m.coffeeStation?.name, "My station")
+        XCTAssertEqual(m.coffeeStation?.accessories.first?.type, "ScaleAcaiaLunar")
+        XCTAssertEqual(m.coffeeStation?.accessories.first?.connected, false)
+
+        // Round-trips through the matched encoder/decoder.
+        let restored = try JSONDecoder.laMarzocco().decode(
+            Machine.self, from: JSONEncoder.laMarzocco().encode(m))
+        XCTAssertEqual(restored, m)
+    }
+
+    func testMachineDefaultsWhenOfflineAndStationAbsent() throws {
+        let m = try JSONDecoder.laMarzocco().decode(
+            Machine.self, from: Data(#"{"serialNumber":"X"}"#.utf8))
+        XCTAssertFalse(m.offlineMode)
+        XCTAssertNil(m.coffeeStation)
     }
 
     func testBrewByWeightToleratesMissingScaleConnected() throws {

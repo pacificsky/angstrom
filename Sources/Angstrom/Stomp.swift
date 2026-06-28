@@ -35,6 +35,12 @@ enum Stomp {
     /// Decode a frame: split on the first blank line into headers/body, parse
     /// the command + `key:value` headers (split on the first `:` only), and
     /// strip the trailing NUL from the body.
+    ///
+    /// Intentionally more tolerant than pylamarzocco's `decode_stomp_ws_message`,
+    /// which raises on a colon-less header line and validates the command against
+    /// `StompMessageType`. Here a malformed header line is skipped and any command
+    /// string is accepted, matching this library's tolerant-parsing convention;
+    /// the handshake/subscribe logic keys off known commands regardless.
     static func decode(_ message: String) -> Frame? {
         guard let separator = message.range(of: "\n\n") else { return nil }
         let headerSection = message[message.startIndex..<separator.lowerBound]
