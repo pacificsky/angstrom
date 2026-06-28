@@ -381,6 +381,42 @@ final class LaMarzoccoMachineTests: XCTestCase {
         XCTAssertEqual(machine.dashboard?.grinderBaristaLight?.enabled, false) // optimistic
     }
 
+    // MARK: - Smart standby dispatch (auto-standby branch)
+
+    private func commandBody(_ backend: MockBackend, _ command: String) throws -> [String: Any]? {
+        guard let data = backend.body(pathSuffix: "/command/\(command)") else { return nil }
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    func testSmartStandbyUsesAutoStandbyWhenSupported() async throws {
+        // The Micra schedule fixture reports autoStandBySupported = true, so the
+        // device layer must dispatch the auto-standby command with an HH:MM string
+        // (matching pylamarzocco's set_smart_standby), not CoffeeMachineSettingSmartStandBy.
+        let backend = try fixtureBackend()
+        let machine = makeMachine(backend)
+        try await machine.refreshSchedule()
+        XCTAssertEqual(machine.schedule?.autoStandBySupported, true)
+
+        try await machine.setSmartStandby(enabled: true, minutes: 90, after: .powerOn)
+        XCTAssertEqual(try commandBody(backend, "CoffeeMachineSettingAutoStandBy")?["mode"] as? String, "01:30")
+        XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineSettingSmartStandBy"), 0)
+
+        // Disabling sends the "Off" sentinel.
+        try await machine.setSmartStandby(enabled: false, minutes: 90, after: .powerOn)
+        XCTAssertEqual(try commandBody(backend, "CoffeeMachineSettingAutoStandBy")?["mode"] as? String, "Off")
+    }
+
+    func testSmartStandbyFallsBackToSmartStandbyCommand() async throws {
+        // With no schedule loaded (autoStandBySupported unknown), the legacy
+        // smart-standby command is used.
+        let backend = try fixtureBackend()
+        let machine = makeMachine(backend)
+        try await machine.setSmartStandby(enabled: true, minutes: 10, after: .powerOn)
+        let b = try XCTUnwrap(try commandBody(backend, "CoffeeMachineSettingSmartStandBy"))
+        XCTAssertEqual(b["minutes"] as? Int, 10)
+        XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineSettingAutoStandBy"), 0)
+    }
+
     // MARK: - Statistics
 
     func testRefreshStatistics() async throws {

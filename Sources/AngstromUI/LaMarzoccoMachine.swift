@@ -293,9 +293,26 @@ public final class LaMarzoccoMachine {
         try await capturing { try await client.setPreExtractionTimes(serial: serialNumber, secondsIn: secondsIn, secondsOut: secondsOut) }
     }
 
+    /// Configure standby. Mirrors `pylamarzocco`'s `set_smart_standby`: on machines
+    /// whose scheduling payload reports ``MachineSchedule/autoStandBySupported``,
+    /// this dispatches the auto-standby command with an `"HH:MM"` (or `"Off"`)
+    /// mode string instead of the smart-standby command, since those machines
+    /// don't honor `CoffeeMachineSettingSmartStandBy`.
     @discardableResult
     public func setSmartStandby(enabled: Bool, minutes: Int, after: SmartStandbyAfter) async throws -> CommandResponse {
-        try await capturing { try await client.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) }
+        if schedule?.autoStandBySupported == true {
+            let mode = enabled ? String(format: "%02d:%02d", minutes / 60, minutes % 60) : "Off"
+            return try await setAutoStandby(mode: mode)
+        }
+        return try await capturing { try await client.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) }
+    }
+
+    /// Set the auto-standby mode string directly (`"HH:MM"` / `"Off"`). Most
+    /// callers want ``setSmartStandby(enabled:minutes:after:)``, which picks this
+    /// path automatically on machines that require it.
+    @discardableResult
+    public func setAutoStandby(mode: String) async throws -> CommandResponse {
+        try await capturing { try await client.setAutoStandby(serial: serialNumber, mode: mode) }
     }
 
     @discardableResult

@@ -20,6 +20,11 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
     public var requiresFirmwareUpdate: Bool
     /// A firmware update is available (but not required).
     public var hasFirmwareUpdateAvailable: Bool
+    /// Whether the device is operating in offline (local-only) mode.
+    public var offlineMode: Bool
+    /// The coffee station this device belongs to, if any. (`bleAuthToken` is
+    /// intentionally not modeled — Bluetooth is out of scope.)
+    public var coffeeStation: CoffeeStation?
     public var imageURL: URL?
 
     public var id: String { serialNumber }
@@ -39,6 +44,8 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         connectionDate: Date? = nil,
         requiresFirmwareUpdate: Bool = false,
         hasFirmwareUpdateAvailable: Bool = false,
+        offlineMode: Bool = false,
+        coffeeStation: CoffeeStation? = nil,
         imageURL: URL? = nil
     ) {
         self.serialNumber = serialNumber
@@ -50,12 +57,15 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         self.connectionDate = connectionDate
         self.requiresFirmwareUpdate = requiresFirmwareUpdate
         self.hasFirmwareUpdateAvailable = hasFirmwareUpdateAvailable
+        self.offlineMode = offlineMode
+        self.coffeeStation = coffeeStation
         self.imageURL = imageURL
     }
 
     private enum CodingKeys: String, CodingKey {
         case serialNumber, name, modelName, modelCode, type, location
-        case connected, connectionDate, requireFirmwareUpdate, availableFirmwareUpdate, imageUrl
+        case connected, connectionDate, requireFirmwareUpdate, availableFirmwareUpdate
+        case offlineMode, coffeeStation, imageUrl
     }
 
     public init(from decoder: Decoder) throws {
@@ -71,6 +81,8 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         connectionDate = (try? c.decodeIfPresent(Date.self, forKey: .connectionDate)) ?? nil
         requiresFirmwareUpdate = (try? c.decode(Bool.self, forKey: .requireFirmwareUpdate)) ?? false
         hasFirmwareUpdateAvailable = (try? c.decode(Bool.self, forKey: .availableFirmwareUpdate)) ?? false
+        offlineMode = (try? c.decode(Bool.self, forKey: .offlineMode)) ?? false
+        coffeeStation = (try? c.decodeIfPresent(CoffeeStation.self, forKey: .coffeeStation)) ?? nil
         let urlString = (try? c.decodeIfPresent(String.self, forKey: .imageUrl)) ?? nil
         imageURL = urlString.flatMap(URL.init(string:))
     }
@@ -87,6 +99,64 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         try c.encodeIfPresent(connectionDate, forKey: .connectionDate)
         try c.encode(requiresFirmwareUpdate, forKey: .requireFirmwareUpdate)
         try c.encode(hasFirmwareUpdateAvailable, forKey: .availableFirmwareUpdate)
+        try c.encode(offlineMode, forKey: .offlineMode)
+        try c.encodeIfPresent(coffeeStation, forKey: .coffeeStation)
+        try c.encodeIfPresent(imageURL?.absoluteString, forKey: .imageUrl)
+    }
+}
+
+/// A coffee station: a named grouping of a coffee machine with its grinders and
+/// accessories. pylamarzocco keeps this as an opaque `dict`; here the identity
+/// and paired ``accessories`` (e.g. scales) are modeled so the data isn't lost,
+/// while the redundant nested machine/grinder payloads are skipped.
+public struct CoffeeStation: Codable, Sendable, Hashable {
+    public let id: String?
+    public let name: String?
+    public let accessories: [CoffeeStationAccessory]
+
+    private enum CodingKeys: String, CodingKey { case id, name, accessories }
+
+    public init(id: String? = nil, name: String? = nil, accessories: [CoffeeStationAccessory] = []) {
+        self.id = id
+        self.name = name
+        self.accessories = accessories
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        let entries = (try? c.decode([Lenient<CoffeeStationAccessory>].self, forKey: .accessories)) ?? []
+        accessories = entries.compactMap(\.value)
+    }
+}
+
+/// An accessory paired to a ``CoffeeStation`` (e.g. a connected scale).
+public struct CoffeeStationAccessory: Codable, Sendable, Hashable {
+    public let type: String
+    public let name: String?
+    public let connected: Bool
+    public let batteryLevel: Int?
+    public let imageURL: URL?
+
+    private enum CodingKeys: String, CodingKey { case type, name, connected, batteryLevel, imageUrl }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        connected = (try? c.decode(Bool.self, forKey: .connected)) ?? false
+        batteryLevel = (try? c.decodeIfPresent(Int.self, forKey: .batteryLevel)) ?? nil
+        let urlString = (try? c.decodeIfPresent(String.self, forKey: .imageUrl)) ?? nil
+        imageURL = urlString.flatMap(URL.init(string:))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encode(connected, forKey: .connected)
+        try c.encodeIfPresent(batteryLevel, forKey: .batteryLevel)
         try c.encodeIfPresent(imageURL?.absoluteString, forKey: .imageUrl)
     }
 }

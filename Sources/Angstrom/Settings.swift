@@ -12,13 +12,23 @@ public struct MachineSettings: Sendable, Hashable, Codable {
     public let plumbInSupported: Bool
     public let autoUpdate: Bool
     public let autoUpdateSupported: Bool
+    /// Cropster (roast-logging integration) capability/state.
+    public let cropsterSupported: Bool
+    public let cropsterActive: Bool
+    /// Hemro (grinder integration) capability/state.
+    public let hemroSupported: Bool
+    public let hemroActive: Bool
+    /// Whether the machine exposes a factory-reset action.
+    public let factoryResetSupported: Bool
     public let firmware: [FirmwareInfo]
 
     public var machineFirmware: FirmwareInfo? { firmware.first { $0.type == .machine } }
     public var gatewayFirmware: FirmwareInfo? { firmware.first { $0.type == .gateway } }
 
     private enum CodingKeys: String, CodingKey {
-        case wifiSsid, wifiRssi, isPlumbedIn, plumbInSupported, autoUpdate, autoUpdateSupported, actualFirmwares
+        case wifiSsid, wifiRssi, isPlumbedIn, plumbInSupported, autoUpdate, autoUpdateSupported
+        case cropsterSupported, cropsterActive, hemroSupported, hemroActive, factoryResetSupported
+        case actualFirmwares
     }
 
     public init(from decoder: Decoder) throws {
@@ -30,6 +40,11 @@ public struct MachineSettings: Sendable, Hashable, Codable {
         plumbInSupported = (try? c.decode(Bool.self, forKey: .plumbInSupported)) ?? false
         autoUpdate = (try? c.decode(Bool.self, forKey: .autoUpdate)) ?? false
         autoUpdateSupported = (try? c.decode(Bool.self, forKey: .autoUpdateSupported)) ?? false
+        cropsterSupported = (try? c.decode(Bool.self, forKey: .cropsterSupported)) ?? false
+        cropsterActive = (try? c.decode(Bool.self, forKey: .cropsterActive)) ?? false
+        hemroSupported = (try? c.decode(Bool.self, forKey: .hemroSupported)) ?? false
+        hemroActive = (try? c.decode(Bool.self, forKey: .hemroActive)) ?? false
+        factoryResetSupported = (try? c.decode(Bool.self, forKey: .factoryResetSupported)) ?? false
         // Decode firmware entries individually so one malformed entry doesn't
         // discard the rest (matching the per-widget resilience elsewhere).
         let firmwareEntries = (try? c.decode([Lenient<FirmwareInfo>].self, forKey: .actualFirmwares)) ?? []
@@ -45,6 +60,11 @@ public struct MachineSettings: Sendable, Hashable, Codable {
         try c.encode(plumbInSupported, forKey: .plumbInSupported)
         try c.encode(autoUpdate, forKey: .autoUpdate)
         try c.encode(autoUpdateSupported, forKey: .autoUpdateSupported)
+        try c.encode(cropsterSupported, forKey: .cropsterSupported)
+        try c.encode(cropsterActive, forKey: .cropsterActive)
+        try c.encode(hemroSupported, forKey: .hemroSupported)
+        try c.encode(hemroActive, forKey: .hemroActive)
+        try c.encode(factoryResetSupported, forKey: .factoryResetSupported)
         try c.encode(firmware, forKey: .actualFirmwares)
     }
 }
@@ -95,7 +115,10 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         machine = try Machine(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         smartWakeUpSleep = (try? c.decode(SmartWakeUpSleep.self, forKey: .smartWakeUpSleep)) ?? SmartWakeUpSleep()
-        smartWakeUpSleepSupported = (try? c.decode(Bool.self, forKey: .smartWakeUpSleepSupported)) ?? false
+        // Defaults to `true` when the key is absent, matching pylamarzocco's
+        // `ThingSchedulingSettings.smart_wake_up_sleep_supported` default — the
+        // feature is assumed present unless the cloud explicitly says otherwise.
+        smartWakeUpSleepSupported = (try? c.decode(Bool.self, forKey: .smartWakeUpSleepSupported)) ?? true
         smartStandby = (try? c.decodeIfPresent(SmartStandby.self, forKey: .smartStandBy)) ?? nil
         smartStandbySupported = (try? c.decode(Bool.self, forKey: .smartStandBySupported)) ?? false
         autoStandBy = (try? c.decodeIfPresent(String.self, forKey: .autoStandBy)) ?? nil
@@ -121,12 +144,19 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
 public struct SmartWakeUpSleep: Sendable, Hashable, Codable {
     public let smartStandbyEnabled: Bool
     public let smartStandbyMinutes: Int
+    /// Allowed range/granularity for ``smartStandbyMinutes`` (UI sliders).
+    public let smartStandbyMinutesMin: Int
+    public let smartStandbyMinutesMax: Int
+    public let smartStandbyMinutesStep: Int
     public let smartStandbyAfter: SmartStandbyAfter
     public let schedules: [WakeUpSchedule]
 
     private enum CodingKeys: String, CodingKey {
         case smartStandbyEnabled = "smartStandByEnabled"
         case smartStandbyMinutes = "smartStandByMinutes"
+        case smartStandbyMinutesMin = "smartStandByMinutesMin"
+        case smartStandbyMinutesMax = "smartStandByMinutesMax"
+        case smartStandbyMinutesStep = "smartStandByMinutesStep"
         case smartStandbyAfter = "smartStandByAfter"
         case schedules
     }
@@ -134,11 +164,17 @@ public struct SmartWakeUpSleep: Sendable, Hashable, Codable {
     public init(
         smartStandbyEnabled: Bool = false,
         smartStandbyMinutes: Int = 0,
+        smartStandbyMinutesMin: Int = 0,
+        smartStandbyMinutesMax: Int = 0,
+        smartStandbyMinutesStep: Int = 0,
         smartStandbyAfter: SmartStandbyAfter = .powerOn,
         schedules: [WakeUpSchedule] = []
     ) {
         self.smartStandbyEnabled = smartStandbyEnabled
         self.smartStandbyMinutes = smartStandbyMinutes
+        self.smartStandbyMinutesMin = smartStandbyMinutesMin
+        self.smartStandbyMinutesMax = smartStandbyMinutesMax
+        self.smartStandbyMinutesStep = smartStandbyMinutesStep
         self.smartStandbyAfter = smartStandbyAfter
         self.schedules = schedules
     }
@@ -147,6 +183,9 @@ public struct SmartWakeUpSleep: Sendable, Hashable, Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         smartStandbyEnabled = (try? c.decode(Bool.self, forKey: .smartStandbyEnabled)) ?? false
         smartStandbyMinutes = (try? c.decode(Int.self, forKey: .smartStandbyMinutes)) ?? 0
+        smartStandbyMinutesMin = (try? c.decode(Int.self, forKey: .smartStandbyMinutesMin)) ?? 0
+        smartStandbyMinutesMax = (try? c.decode(Int.self, forKey: .smartStandbyMinutesMax)) ?? 0
+        smartStandbyMinutesStep = (try? c.decode(Int.self, forKey: .smartStandbyMinutesStep)) ?? 0
         smartStandbyAfter = (try? c.decode(SmartStandbyAfter.self, forKey: .smartStandbyAfter)) ?? .powerOn
         // Decode schedules individually so one malformed entry doesn't wipe the list.
         let entries = (try? c.decode([Lenient<WakeUpSchedule>].self, forKey: .schedules)) ?? []
@@ -157,13 +196,22 @@ public struct SmartWakeUpSleep: Sendable, Hashable, Codable {
 public struct SmartStandby: Sendable, Hashable, Codable {
     public let enabled: Bool
     public let minutes: Int
+    /// Allowed range/granularity for ``minutes`` (UI sliders).
+    public let minutesMin: Int
+    public let minutesMax: Int
+    public let minutesStep: Int
     public let after: SmartStandbyAfter
 
-    private enum CodingKeys: String, CodingKey { case enabled, minutes, after }
+    private enum CodingKeys: String, CodingKey {
+        case enabled, minutes, minutesMin, minutesMax, minutesStep, after
+    }
 
-    public init(enabled: Bool, minutes: Int, after: SmartStandbyAfter) {
+    public init(enabled: Bool, minutes: Int, minutesMin: Int = 0, minutesMax: Int = 0, minutesStep: Int = 0, after: SmartStandbyAfter) {
         self.enabled = enabled
         self.minutes = minutes
+        self.minutesMin = minutesMin
+        self.minutesMax = minutesMax
+        self.minutesStep = minutesStep
         self.after = after
     }
 
@@ -171,6 +219,9 @@ public struct SmartStandby: Sendable, Hashable, Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
         minutes = (try? c.decode(Int.self, forKey: .minutes)) ?? 0
+        minutesMin = (try? c.decode(Int.self, forKey: .minutesMin)) ?? 0
+        minutesMax = (try? c.decode(Int.self, forKey: .minutesMax)) ?? 0
+        minutesStep = (try? c.decode(Int.self, forKey: .minutesStep)) ?? 0
         after = (try? c.decode(SmartStandbyAfter.self, forKey: .after)) ?? .powerOn
     }
 }
