@@ -1,6 +1,9 @@
 # `cli/` — Angstrom debugging CLI (spec)
 
-> Status: **design only, not yet built.** This file is the agreed shape; no code exists yet.
+> Status: **built.** The `angcli` tool and the library raw-frame tap described
+> here are implemented. `cd cli && swift build` / `swift test`; the v1 command
+> surface (`listen` / `dump` / `machines`) is complete. The deferred `watch`
+> mode remains v2.
 
 A small command-line tool for **learning and debugging the La Marzocco cloud API**
 through Angstrom. It authenticates with a username/password, holds the websocket

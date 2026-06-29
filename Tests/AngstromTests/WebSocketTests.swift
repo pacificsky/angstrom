@@ -93,6 +93,66 @@ final class WebSocketTests: XCTestCase {
         XCTAssertEqual(update?.widgets.first?.code, "CMMachineStatus")
     }
 
+    // MARK: Raw-frame tap (diagnostic)
+
+    /// The raw-frame tap surfaces every frame in both directions, in order:
+    /// outbound CONNECT, inbound CONNECTED, outbound SUBSCRIBE, then the inbound
+    /// MESSAGE — verbatim, before STOMP decoding.
+    func testRawFrameTapCapturesBothDirections() async throws {
+        let channel = MockWebSocketChannel()
+        let client = makeClient(authBackend())
+        await client.setWebSocketFactoryForTesting { _ in channel }
+        // Register the tap before connecting so the handshake frames are captured.
+        let frames = await client.rawFrames()
+        channel.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+        channel.push(messageFrame(#"{"connected":true,"widgets":[],"removedWidgets":[],"commands":[]}"#))
+
+        var iterator = frames.makeAsyncIterator()
+        func expect(_ direction: RawFrame.Direction, prefix: String) async {
+            let frame = await iterator.next()
+            XCTAssertEqual(frame?.direction, direction)
+            XCTAssertTrue(frame?.text.hasPrefix(prefix) ?? false, "expected \(prefix), got \(frame?.text ?? "nil")")
+        }
+        await expect(.outbound, prefix: "CONNECT")
+        await expect(.inbound, prefix: "CONNECTED")
+        await expect(.outbound, prefix: "SUBSCRIBE")
+        await expect(.inbound, prefix: "MESSAGE")
+
+        await client.disconnectWebSocket()
+    }
+
+    /// The `sendPing` continuation latch: even with many concurrent callbacks
+    /// (as Foundation's `sendPing` can fire on connection abort), exactly one
+    /// wins — so the underlying continuation is resumed at most once.
+    func testResumeOnceClaimsExactlyOnce() async {
+        let once = ResumeOnce()
+        let winners = await withTaskGroup(of: Bool.self) { group -> Int in
+            for _ in 0..<100 { group.addTask { once.claim() } }
+            var count = 0
+            for await won in group where won { count += 1 }
+            return count
+        }
+        XCTAssertEqual(winners, 1)
+    }
+
+    /// A decoded ``DashboardUpdate`` now re-encodes (Codable), so a diagnostic
+    /// tool can serialize the decoded push back to JSON and round-trip it.
+    func testDashboardUpdateRoundTripsThroughJSON() throws {
+        let json = """
+        { "connected": true, "removedWidgets": [{"code":"CMNoWater","index":1}], "commands": [],
+          "widgets": [ { "code": "CMMachineStatus", "index": 1,
+            "output": { "status": "PoweredOn", "availableModes": ["BrewingMode","StandBy"],
+                        "mode": "BrewingMode", "nextStatus": null, "brewingStartTime": null } } ] }
+        """
+        let decoded = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(json.utf8))
+        let reEncoded = try JSONEncoder.laMarzocco().encode(decoded)
+        let again = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: reEncoded)
+        XCTAssertEqual(decoded, again)
+        XCTAssertEqual(again.removedWidgets.first?.code, "CMNoWater")
+        XCTAssertEqual(again.widgets.first?.code, "CMMachineStatus")
+    }
+
     // MARK: Two-tier command confirmation
 
     /// Push a confirmation frame repeatedly (extra frames are dropped) until the

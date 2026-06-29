@@ -4,7 +4,7 @@ import Foundation
 
 /// The acknowledgement the cloud returns for a command. The final result for a
 /// command is delivered later over the websocket (see M3).
-public struct CommandResponse: Sendable, Hashable, Decodable {
+public struct CommandResponse: Sendable, Hashable, Codable {
     public let id: String
     public let status: CommandStatus
     public let errorCode: String?

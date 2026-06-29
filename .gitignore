@@ -12,5 +12,8 @@ xcuserdata/
 # macOS
 .DS_Store
 
+# Runtime logs (e.g. captured angcli output)
+*.log
+
 # Local DocC preview
 .docs-preview/
