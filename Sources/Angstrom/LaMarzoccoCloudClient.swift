@@ -57,6 +57,7 @@ public actor LaMarzoccoCloudClient {
     private var manuallyDisconnected = false
     private var firstConnect: CheckedContinuation<Void, Error>?
     private var updateListeners: [UUID: AsyncStream<DashboardUpdate>.Continuation] = [:]
+    private var rawFrameListeners: [UUID: AsyncStream<RawFrame>.Continuation] = [:]
     private var pendingCommands: [String: PendingCommand] = [:]
     private var reconnectAttempt = 0
 
@@ -146,6 +147,18 @@ public actor LaMarzoccoCloudClient {
         } catch {
             throw LaMarzoccoError.decoding("scheduling: \(error)")
         }
+    }
+
+    /// Fetch the **verbatim** REST JSON body for a thing endpoint, bypassing
+    /// Angstrom's typed decoding.
+    ///
+    /// Diagnostic surface for wire-debugging tools (e.g. the in-repo `angcli`):
+    /// it returns exactly what the server sent so the raw REST shape can be
+    /// diffed against the raw websocket push. Apps should use the typed reads
+    /// (``dashboard(serial:)`` / ``settings(serial:)`` / ``schedule(serial:)``),
+    /// which this mirrors endpoint-for-endpoint.
+    public func rawRead(_ endpoint: RawEndpoint, serial: String) async throws -> Data {
+        try await authed(path: "/things/\(serial)/\(endpoint.path)", method: "GET")
     }
 
     /// Read the current power state of a machine or grinder.
@@ -390,6 +403,8 @@ public actor LaMarzoccoCloudClient {
         await teardownConnection()
         for listener in updateListeners.values { listener.finish() }
         updateListeners.removeAll()
+        for listener in rawFrameListeners.values { listener.finish() }
+        rawFrameListeners.removeAll()
     }
 
     /// Test seam: shrink the websocket timings so reconnect/heartbeat/timeout
@@ -413,6 +428,35 @@ public actor LaMarzoccoCloudClient {
     }
 
     private func removeListener(_ id: UUID) { updateListeners[id] = nil }
+
+    /// A diagnostic stream of **raw** websocket frames in both directions —
+    /// inbound text emitted before STOMP decoding and outbound text emitted at
+    /// the send boundary (handshake, subscribe/unsubscribe, heartbeat pings).
+    /// Multiplexed exactly like ``dashboardUpdates()``: each call returns an
+    /// independent stream and all registered streams receive every frame.
+    ///
+    /// Intended for wire-debugging tools (the in-repo `angcli`). It costs nothing
+    /// when no stream is open — frames are only materialized into the tap while at
+    /// least one listener is registered.
+    public func rawFrames() -> AsyncStream<RawFrame> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<RawFrame>.makeStream()
+        rawFrameListeners[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeRawFrameListener(id) }
+        }
+        return stream
+    }
+
+    private func removeRawFrameListener(_ id: UUID) { rawFrameListeners[id] = nil }
+
+    /// Fan a captured frame out to every raw-frame listener. A no-op (and so
+    /// zero-cost at the call sites) while no diagnostic stream is open.
+    private func emitRawFrame(_ direction: RawFrame.Direction, _ text: String) {
+        guard !rawFrameListeners.isEmpty else { return }
+        let frame = RawFrame(direction: direction, text: text)
+        for listener in rawFrameListeners.values { listener.yield(frame) }
+    }
 
     /// Test seam: inject a websocket channel factory.
     func setWebSocketFactoryForTesting(_ factory: @escaping @Sendable (URLRequest) -> any WebSocketChannel) {
@@ -457,19 +501,19 @@ public actor LaMarzoccoCloudClient {
             if self.channel === channel { self.channel = nil; self.subscriptionId = nil }
         }
 
-        try await channel.send(Stomp.encode(.connect, headers: [
+        try await sendFrame(channel, Stomp.encode(.connect, headers: [
             ("host", Self.webSocketHost),
             ("accept-version", "1.2,1.1,1.0"),
             ("heart-beat", "0,0"),
             ("Authorization", "Bearer \(token)"),
         ]))
-        guard let connected = Stomp.decode(try await channel.receive()),
+        guard let connected = Stomp.decode(try await receiveFrame(channel)),
               connected.command == Stomp.Command.connected.rawValue else {
             throw LaMarzoccoError.webSocket("expected CONNECTED frame")
         }
 
         let subscription = UUID().uuidString
-        try await channel.send(Stomp.encode(.subscribe, headers: [
+        try await sendFrame(channel, Stomp.encode(.subscribe, headers: [
             ("destination", "/ws/sn/\(serial)/dashboard"),
             ("ack", "auto"),
             ("id", subscription),
@@ -483,8 +527,24 @@ public actor LaMarzoccoCloudClient {
         startHeartbeat()
 
         while true {
-            handleFrame(try await channel.receive())
+            handleFrame(try await receiveFrame(channel))
         }
+    }
+
+    /// Send a frame and, before it leaves, mirror it to the raw-frame tap as
+    /// outbound. All STOMP text the client emits flows through here.
+    private func sendFrame(_ channel: any WebSocketChannel, _ text: String) async throws {
+        emitRawFrame(.outbound, text)
+        try await channel.send(text)
+    }
+
+    /// Receive a frame and mirror its verbatim text to the raw-frame tap as
+    /// inbound *before* any STOMP decoding — so heartbeats, non-`MESSAGE` frames,
+    /// and bodies that fail to decode all surface on the tap.
+    private func receiveFrame(_ channel: any WebSocketChannel) async throws -> String {
+        let text = try await channel.receive()
+        emitRawFrame(.inbound, text)
+        return text
     }
 
     private func handleFrame(_ raw: String) {
@@ -506,7 +566,7 @@ public actor LaMarzoccoCloudClient {
     private func teardownConnection() async {
         stopHeartbeat()
         if let channel, let subscriptionId {
-            try? await channel.send(Stomp.encode(.unsubscribe, headers: [("id", subscriptionId)]))
+            try? await sendFrame(channel, Stomp.encode(.unsubscribe, headers: [("id", subscriptionId)]))
         }
         channel?.close()
         channel = nil
@@ -536,7 +596,13 @@ public actor LaMarzoccoCloudClient {
         heartbeatTask?.cancel()
         heartbeatTask = nil
     }
-    private func pingChannel() async { try? await channel?.sendPing() }
+    private func pingChannel() async {
+        // The websocket heartbeat is a protocol-level ping with no STOMP text;
+        // surface it on the tap as a synthetic outbound marker so heartbeat
+        // activity is visible to wire-debugging tools.
+        emitRawFrame(.outbound, RawFrame.heartbeatMarker)
+        try? await channel?.sendPing()
+    }
 
     private func awaitConfirmation(id: String) async -> CommandResponse? {
         let timeoutDuration = commandTimeout

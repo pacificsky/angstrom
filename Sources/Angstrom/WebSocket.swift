@@ -33,8 +33,15 @@ final class URLSessionWebSocketChannel: WebSocketChannel, @unchecked Sendable {
     }
 
     func sendPing() async throws {
+        // `URLSessionWebSocketTask.sendPing` can invoke its handler **more than
+        // once** when the connection aborts mid-flight — it fires for the send
+        // failure and again as the socket tears down. Resuming a checked
+        // continuation twice is a fatal error (`SWIFT TASK CONTINUATION MISUSE`),
+        // so latch to a single resume and drop any later callbacks.
+        let once = ResumeOnce()
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             task.sendPing { error in
+                guard once.claim() else { return }
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             }
         }
@@ -43,12 +50,25 @@ final class URLSessionWebSocketChannel: WebSocketChannel, @unchecked Sendable {
     func close() { task.cancel(with: .normalClosure, reason: nil) }
 }
 
+/// A one-shot latch: ``claim()`` returns `true` exactly once across all threads.
+/// Guards a continuation against framework callbacks that fire more than once.
+final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
+    }
+}
+
 // MARK: - Pushed dashboard update
 
 /// A dashboard update pushed over the websocket. Carries the same typed widget
 /// schema as ``Dashboard`` plus the websocket-only envelope: which widgets were
 /// removed, and any ``commands`` results (used to confirm pending commands).
-public struct DashboardUpdate: Sendable, Hashable, Decodable {
+public struct DashboardUpdate: Sendable, Hashable, Codable {
     public let connected: Bool
     public let widgets: [Widget]
     /// Widgets the machine dropped since the last update (code + group index).
@@ -76,10 +96,24 @@ public struct DashboardUpdate: Sendable, Hashable, Decodable {
         connectionDate = (try? c.decodeIfPresent(Date.self, forKey: .connectionDate)) ?? nil
         uuid = (try? c.decodeIfPresent(String.self, forKey: .uuid)) ?? nil
     }
+
+    /// Re-encode the update back to its wire shape. Provided so diagnostic tools
+    /// (e.g. the `angcli` debugger) can serialize the decoded push to JSON;
+    /// recognized widgets round-trip, while `.unknown` widgets keep their
+    /// code/index but lose the raw `output` they couldn't decode.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(connected, forKey: .connected)
+        try c.encode(widgets, forKey: .widgets)
+        try c.encode(removedWidgets, forKey: .removedWidgets)
+        try c.encode(commands, forKey: .commands)
+        try c.encodeIfPresent(connectionDate, forKey: .connectionDate)
+        try c.encodeIfPresent(uuid, forKey: .uuid)
+    }
 }
 
 /// A widget removed in a ``DashboardUpdate``, identified by code + group index.
-public struct RemovedWidget: Sendable, Hashable, Decodable {
+public struct RemovedWidget: Sendable, Hashable, Codable {
     public let code: String
     public let index: Int
 }

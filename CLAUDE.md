@@ -70,6 +70,11 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
   `DashboardUpdate`, and `Dashboard.applying(_:)` merge.
 - **`Optimistic.swift`** — pure `Dashboard.replacing(_:)` + `setting…(_:)` transforms used by
   the device layer for optimistic updates.
+- **`Diagnostics.swift`** — opt-in debug surface for wire-tracing: `RawFrame` +
+  `rawFrames() -> AsyncStream<RawFrame>` (multiplexed like `dashboardUpdates()`, taps both
+  directions — inbound before `Stomp.decode`, outbound at `channel.send`, plus heartbeat
+  pings), and `RawEndpoint` + `rawRead(_:serial:) -> Data` for verbatim REST JSON. Zero cost
+  when no `rawFrames()` listener is open. Consumed by the `cli/` tool below.
 
 ### `Sources/AngstromUI/` — the observable device layer
 
@@ -81,6 +86,17 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
 - **`MachineSnapshot.swift`** — `Codable {serialNumber, dashboard?, settings?, schedule?}` for
   stale-on-launch UI (recognized widgets round-trip losslessly; unknown widgets keep code/index
   but lose their raw payload).
+
+### `cli/` — the `angcli` wire-debugging tool
+
+A **separate, nested SwiftPM package** (not part of the library build, so library consumers
+never see it or its `swift-argument-parser` dependency). Depends on `Angstrom` by path. Builds
+and tests independently: `cd cli && swift build` / `swift test` (also wired as its own CI step).
+Authenticates, holds the websocket open, and prints raw STOMP frames (both directions) and the
+decoded `DashboardUpdate` side by side. Commands: `listen` (default), `dump <dashboard|settings|
+schedule>`, `machines`. Persists `InstallationKey` + `isRegistered` to
+`~/.config/angstrom/installation.json` (mode `0600`); never persists/prints tokens or proof
+headers. See `cli/SPEC.md` for the full design.
 
 ### Conventions worth keeping
 

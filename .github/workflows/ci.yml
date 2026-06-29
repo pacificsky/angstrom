@@ -30,3 +30,12 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # The nested `cli/` package (the `angcli` wire-debugging tool) builds
+      # against the in-repo library by path. It's isolated from the library
+      # build above — library consumers never see it or its dependencies.
+      - name: Build CLI
+        run: swift build --package-path cli
+
+      - name: Test CLI
+        run: swift test --package-path cli
