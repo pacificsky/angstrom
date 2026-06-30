@@ -109,7 +109,8 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.0 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
+v1.1 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
-observable device layer. Bluetooth remains out of scope.
+observable device layer. Adds the `angcli` wire-debugging tool, a porting-watermark +
+drift-detection workflow, and a DocC documentation site. Bluetooth remains out of scope.
