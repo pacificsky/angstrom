@@ -63,6 +63,17 @@ final class ResumeOnce: @unchecked Sendable {
     }
 }
 
+// MARK: - Connection events
+
+/// A websocket connection transition, delivered on
+/// ``LaMarzoccoCloudClient/connectionEvents()``. `.connected` fires after every
+/// successful subscribe — the initial connection *and* each automatic
+/// reconnect — and `.disconnected` when the connection is lost or torn down.
+public enum ConnectionEvent: Sendable, Hashable {
+    case connected
+    case disconnected
+}
+
 // MARK: - Pushed dashboard update
 
 /// A dashboard update pushed over the websocket. Carries the same typed widget

@@ -58,6 +58,7 @@ public actor LaMarzoccoCloudClient {
     private var firstConnect: CheckedContinuation<Void, Error>?
     private var updateListeners: [UUID: AsyncStream<DashboardUpdate>.Continuation] = [:]
     private var rawFrameListeners: [UUID: AsyncStream<RawFrame>.Continuation] = [:]
+    private var connectionListeners: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
     private var pendingCommands: [String: PendingCommand] = [:]
     private var reconnectAttempt = 0
 
@@ -405,6 +406,8 @@ public actor LaMarzoccoCloudClient {
         updateListeners.removeAll()
         for listener in rawFrameListeners.values { listener.finish() }
         rawFrameListeners.removeAll()
+        for listener in connectionListeners.values { listener.finish() }
+        connectionListeners.removeAll()
     }
 
     /// Test seam: shrink the websocket timings so reconnect/heartbeat/timeout
@@ -429,9 +432,42 @@ public actor LaMarzoccoCloudClient {
 
     private func removeListener(_ id: UUID) { updateListeners[id] = nil }
 
+    /// A stream of websocket connection transitions: `.connected` after every
+    /// successful subscribe (initial *and* each auto-reconnect), `.disconnected`
+    /// when the connection is lost or torn down. The dashboard feed is
+    /// change-only — subscribing delivers no snapshot — so state can change
+    /// unobserved while the socket is down; on each `.connected` a consumer
+    /// should re-fetch the state it cares about (see
+    /// ``dashboard(serial:)``). Mirrors pylamarzocco's `connect_callback` /
+    /// `disconnect_callback`. Multiplexed like ``dashboardUpdates()``: each call
+    /// returns an independent stream reporting transitions from registration on.
+    public func connectionEvents() -> AsyncStream<ConnectionEvent> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<ConnectionEvent>.makeStream()
+        connectionListeners[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeConnectionListener(id) }
+        }
+        return stream
+    }
+
+    private func removeConnectionListener(_ id: UUID) { connectionListeners[id] = nil }
+
+    /// Update ``isWebSocketConnected`` and fan the transition out to every
+    /// connection-event listener. All connected-state changes flow through here
+    /// so listeners see exactly one event per transition.
+    private func setConnected(_ connected: Bool) {
+        guard isWebSocketConnected != connected else { return }
+        isWebSocketConnected = connected
+        let event: ConnectionEvent = connected ? .connected : .disconnected
+        for listener in connectionListeners.values { listener.yield(event) }
+    }
+
     /// A diagnostic stream of **raw** websocket frames in both directions —
-    /// inbound text emitted before STOMP decoding and outbound text emitted at
-    /// the send boundary (handshake, subscribe/unsubscribe, heartbeat pings).
+    /// inbound text emitted before STOMP decoding (plus a synthetic
+    /// ``RawFrame/pongMarker`` when a heartbeat round-trip completes) and
+    /// outbound text emitted at the send boundary (handshake,
+    /// subscribe/unsubscribe, heartbeat pings).
     /// Multiplexed exactly like ``dashboardUpdates()``: each call returns an
     /// independent stream and all registered streams receive every frame.
     ///
@@ -495,12 +531,16 @@ public actor LaMarzoccoCloudClient {
         // and so any handshake-phase throw still closes the socket via the defer.
         self.channel = channel
         defer {
-            isWebSocketConnected = false
+            setConnected(false)
             stopHeartbeat()
             channel.close()
             if self.channel === channel { self.channel = nil; self.subscriptionId = nil }
         }
 
+        // `heart-beat: 0,0` (no STOMP-level heartbeats) matches pylamarzocco
+        // exactly — liveness is enforced at the websocket layer instead, via the
+        // ping/pong deadline in `pingChannel()` (upstream's aiohttp `heartbeat=15`).
+        // Don't negotiate STOMP heartbeats without verifying the server honors them.
         try await sendFrame(channel, Stomp.encode(.connect, headers: [
             ("host", Self.webSocketHost),
             ("accept-version", "1.2,1.1,1.0"),
@@ -521,7 +561,7 @@ public actor LaMarzoccoCloudClient {
         ]))
 
         self.subscriptionId = subscription
-        isWebSocketConnected = true
+        setConnected(true)
         reconnectAttempt = 0 // a successful (re)connection resets the backoff
         if let cont = firstConnect { firstConnect = nil; cont.resume() }
         startHeartbeat()
@@ -571,7 +611,7 @@ public actor LaMarzoccoCloudClient {
         channel?.close()
         channel = nil
         subscriptionId = nil
-        isWebSocketConnected = false
+        setConnected(false)
         // Fail any in-flight command awaits so callers don't hang.
         let pending = pendingCommands
         pendingCommands.removeAll()
@@ -601,7 +641,42 @@ public actor LaMarzoccoCloudClient {
         // surface it on the tap as a synthetic outbound marker so heartbeat
         // activity is visible to wire-debugging tools.
         emitRawFrame(.outbound, RawFrame.heartbeatMarker)
-        try? await channel?.sendPing()
+        guard let channel else { return }
+        // The ping round-trip is *enforced*, mirroring pylamarzocco's liveness
+        // mechanism (aiohttp `heartbeat=15`, which force-closes when the pong
+        // misses its deadline — aiohttp uses half the heartbeat interval). A
+        // half-open zombie socket (typical after the machine sleeps) keeps the
+        // read loop blocked forever and may never resolve the ping either, so
+        // both a *failed* and a *silent* ping must tear the channel down —
+        // that errors the blocked receive and lets `maintainConnection()`
+        // reconnect.
+        let pongTimeout = heartbeatInterval / 2
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let once = ResumeOnce()
+                let deadline = Task {
+                    try? await Task.sleep(for: pongTimeout)
+                    if once.claim() { cont.resume(throwing: LaMarzoccoError.webSocket("heartbeat pong timed out")) }
+                }
+                Task {
+                    do {
+                        try await channel.sendPing()
+                        deadline.cancel()
+                        if once.claim() { cont.resume() }
+                    } catch {
+                        deadline.cancel()
+                        if once.claim() { cont.resume(throwing: error) }
+                    }
+                }
+            }
+            // Like the ping, the pong is a control frame with no STOMP text;
+            // mirror the completed round-trip onto the tap so liveness is
+            // directly observable in wire-debugging tools.
+            emitRawFrame(.inbound, RawFrame.pongMarker)
+        } catch {
+            log?("websocket heartbeat failed (\(error.localizedDescription)); closing to force reconnect")
+            channel.close()
+        }
     }
 
     private func awaitConfirmation(id: String) async -> CommandResponse? {
