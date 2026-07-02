@@ -1,6 +1,15 @@
 import Foundation
 @testable import Angstrom
 
+/// A tiny thread-safe box for cross-task assertions in tests.
+final class LockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ value: T) { self.value = value }
+    func get() -> T { lock.withLock { value } }
+    func set(_ newValue: T) { lock.withLock { value = newValue } }
+}
+
 /// A scriptable ``WebSocketChannel`` for tests: records sent frames and lets the
 /// test `push` incoming frames that a pending `receive()` resolves with.
 final class MockWebSocketChannel: WebSocketChannel, @unchecked Sendable {

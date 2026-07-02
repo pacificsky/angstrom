@@ -464,8 +464,10 @@ public actor LaMarzoccoCloudClient {
     }
 
     /// A diagnostic stream of **raw** websocket frames in both directions —
-    /// inbound text emitted before STOMP decoding and outbound text emitted at
-    /// the send boundary (handshake, subscribe/unsubscribe, heartbeat pings).
+    /// inbound text emitted before STOMP decoding (plus a synthetic
+    /// ``RawFrame/pongMarker`` when a heartbeat round-trip completes) and
+    /// outbound text emitted at the send boundary (handshake,
+    /// subscribe/unsubscribe, heartbeat pings).
     /// Multiplexed exactly like ``dashboardUpdates()``: each call returns an
     /// independent stream and all registered streams receive every frame.
     ///
@@ -667,6 +669,10 @@ public actor LaMarzoccoCloudClient {
                     }
                 }
             }
+            // Like the ping, the pong is a control frame with no STOMP text;
+            // mirror the completed round-trip onto the tap so liveness is
+            // directly observable in wire-debugging tools.
+            emitRawFrame(.inbound, RawFrame.pongMarker)
         } catch {
             log?("websocket heartbeat failed (\(error.localizedDescription)); closing to force reconnect")
             channel.close()

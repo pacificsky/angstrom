@@ -76,8 +76,9 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
   the device layer for optimistic updates.
 - **`Diagnostics.swift`** — opt-in debug surface for wire-tracing: `RawFrame` +
   `rawFrames() -> AsyncStream<RawFrame>` (multiplexed like `dashboardUpdates()`, taps both
-  directions — inbound before `Stomp.decode`, outbound at `channel.send`, plus heartbeat
-  pings), and `RawEndpoint` + `rawRead(_:serial:) -> Data` for verbatim REST JSON. Zero cost
+  directions — inbound before `Stomp.decode`, outbound at `channel.send`, plus synthetic
+  heartbeat ping/pong markers), and `RawEndpoint` + `rawRead(_:serial:) -> Data` for
+  verbatim REST JSON. Zero cost
   when no `rawFrames()` listener is open. Consumed by the `cli/` tool below.
 
 ### `Sources/AngstromUI/` — the observable device layer

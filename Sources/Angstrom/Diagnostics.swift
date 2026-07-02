@@ -20,8 +20,9 @@ public struct RawFrame: Sendable, Hashable {
     }
 
     public let direction: Direction
-    /// The verbatim frame text (STOMP framing included). Heartbeat pings, which
-    /// carry no STOMP text, surface as the synthetic marker ``heartbeatMarker``.
+    /// The verbatim frame text (STOMP framing included). Heartbeat pings and
+    /// pongs, which carry no STOMP text, surface as the synthetic markers
+    /// ``heartbeatMarker`` / ``pongMarker``.
     public let text: String
 
     public init(direction: Direction, text: String) {
@@ -32,6 +33,14 @@ public struct RawFrame: Sendable, Hashable {
     /// Synthetic text emitted for an outbound websocket heartbeat ping (which has
     /// no STOMP frame of its own), so heartbeat activity is visible on the tap.
     public static let heartbeatMarker = "[heartbeat: websocket ping]"
+
+    /// Synthetic inbound text emitted when a heartbeat ping's pong arrives
+    /// within its deadline. The pong is a websocket control frame consumed
+    /// inside the transport — it never surfaces as a text frame — so this
+    /// marker is the tap's only direct liveness evidence: ping marker with no
+    /// pong marker means the round-trip failed (and the connection is about to
+    /// be torn down for reconnect).
+    public static let pongMarker = "[heartbeat: websocket pong]"
 }
 
 // MARK: - Raw REST read (diagnostic)

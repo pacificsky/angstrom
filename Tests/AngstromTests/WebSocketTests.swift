@@ -122,6 +122,65 @@ final class WebSocketTests: XCTestCase {
         await client.disconnectWebSocket()
     }
 
+    /// A completed ping round-trip surfaces a synthetic inbound pong marker on
+    /// the tap (after its ping marker), so wire-debugging tools show liveness
+    /// directly instead of inferring it from the absence of reconnect churn.
+    func testHeartbeatPongSurfacesOnRawFrameTap() async throws {
+        final class FrameLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var frames: [RawFrame] = []
+            func append(_ frame: RawFrame) { lock.withLock { frames.append(frame) } }
+            func firstIndex(_ direction: RawFrame.Direction, _ text: String) -> Int? {
+                lock.withLock { frames.firstIndex { $0.direction == direction && $0.text == text } }
+            }
+        }
+        let channel = MockWebSocketChannel()
+        let client = makeClient(authBackend())
+        await client.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                  heartbeatInterval: .milliseconds(20),
+                                                  reconnectBackoff: .seconds(2))
+        await client.setWebSocketFactoryForTesting { _ in channel }
+        let log = FrameLog()
+        let frames = await client.rawFrames()
+        let collector = Task { for await frame in frames { log.append(frame) } }
+        channel.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+
+        try await waitUntil("pong marker on tap") { log.firstIndex(.inbound, RawFrame.pongMarker) != nil }
+        let ping = try XCTUnwrap(log.firstIndex(.outbound, RawFrame.heartbeatMarker))
+        let pong = try XCTUnwrap(log.firstIndex(.inbound, RawFrame.pongMarker))
+        XCTAssertGreaterThan(pong, ping, "the pong marker follows its ping")
+        await client.disconnectWebSocket()
+        collector.cancel()
+    }
+
+    /// A ping that never completes must surface no pong marker — the tap only
+    /// reports round-trips that actually finished.
+    func testNoPongMarkerWhenPingHangs() async throws {
+        let channel = MockWebSocketChannel()
+        channel.pingBehavior = .hang
+        let client = makeClient(authBackend())
+        await client.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                  heartbeatInterval: .milliseconds(20),
+                                                  reconnectBackoff: .seconds(2))
+        await client.setWebSocketFactoryForTesting { _ in channel }
+        let frames = await client.rawFrames()
+        let sawPong = LockedBox(false)
+        let collector = Task {
+            for await frame in frames where frame.direction == .inbound && frame.text == RawFrame.pongMarker {
+                sawPong.set(true)
+            }
+        }
+        channel.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+
+        try await waitUntil("ping attempted") { channel.pingCount >= 1 }
+        try await Task.sleep(for: .milliseconds(50)) // past the pong deadline
+        XCTAssertFalse(sawPong.get(), "a hung ping must not report a pong")
+        await client.disconnectWebSocket()
+        collector.cancel()
+    }
+
     /// The `sendPing` continuation latch: even with many concurrent callbacks
     /// (as Foundation's `sendPing` can fire on connection abort), exactly one
     /// wins — so the underlying continuation is resumed at most once.
