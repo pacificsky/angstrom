@@ -33,13 +33,26 @@ public final class LaMarzoccoMachine {
     /// Whether live updates are currently subscribed — i.e. between a successful
     /// ``start()`` and ``stop()``. The underlying socket may transiently drop and
     /// auto-reconnect while this stays `true`; it reflects the *subscription*, not
-    /// the moment-to-moment socket connection.
+    /// the moment-to-moment socket connection — see ``isConnected`` for that.
     public private(set) var isLive = false
+    /// Whether the live websocket is *actually* connected right now. Unlike
+    /// ``isLive`` this flips `false` during silent drops and zombie-socket
+    /// gaps while auto-reconnect works, so UIs can show "live" vs "stale"
+    /// honestly.
+    public private(set) var isConnected = false
+    /// When ``dashboard`` last changed from the cloud — a REST refresh or an
+    /// applied websocket push. `nil` until the first of either. Lets UIs show
+    /// "last update Nm ago" instead of trusting a stale value.
+    public private(set) var lastUpdateAt: Date?
     /// The most recent error from a refresh, command, or the live connection.
     /// Cleared automatically when a subsequent operation succeeds.
     public private(set) var lastError: Error?
 
     private var updateTask: Task<Void, Never>?
+    /// Mirrors the client's connection events into ``isConnected`` and re-fetches
+    /// the dashboard after every reconnect (the push feed is change-only, so a
+    /// transition missed while the socket was down is never re-pushed).
+    private var connectionTask: Task<Void, Never>?
     /// Synchronously-set guard so two interleaved ``start()`` calls can't both
     /// register a listener before ``updateTask`` is assigned.
     private var isStarting = false
@@ -112,6 +125,7 @@ public final class LaMarzoccoMachine {
         try await capturing {
             let value = try await client.dashboard(serial: serialNumber)
             dashboard = value
+            lastUpdateAt = Date()
             return value
         }
     }
@@ -153,6 +167,7 @@ public final class LaMarzoccoMachine {
             self.dashboard = dashboard
             self.settings = settings
             self.schedule = schedule
+            self.lastUpdateAt = Date()
         }
     }
 
@@ -172,13 +187,16 @@ public final class LaMarzoccoMachine {
         let generation = liveGeneration
         defer { isStarting = false }
 
-        // Register the listener before connecting so no early push is missed.
+        // Register the listeners before connecting so no early push or the
+        // initial connection event is missed.
         let stream = await client.dashboardUpdates()
+        let events = await client.connectionEvents()
         let task = Task { [weak self] in
             for await update in stream {
                 guard let self else { return }
                 if let current = self.dashboard {
                     self.dashboard = current.applying(update)
+                    self.lastUpdateAt = Date()
                 }
             }
             // Stream ended (disconnect). Only tear down if we still own the session.
@@ -187,12 +205,36 @@ public final class LaMarzoccoMachine {
             self.updateTask = nil
         }
         updateTask = task
+        let connTask = Task { [weak self] in
+            // The initial snapshot is the caller's job (refresh before start());
+            // only *re*connects trigger an automatic re-fetch, reconciling any
+            // transition the change-only feed dropped while the socket was down.
+            var sawInitialConnect = false
+            for await event in events {
+                guard let self else { return }
+                switch event {
+                case .connected:
+                    self.isConnected = true
+                    if sawInitialConnect {
+                        _ = try? await self.refreshDashboard()
+                    }
+                    sawInitialConnect = true
+                case .disconnected:
+                    self.isConnected = false
+                }
+            }
+            guard let self, self.liveGeneration == generation else { return }
+            self.isConnected = false
+        }
+        connectionTask = connTask
         do {
             try await client.connectWebSocket(serial: serialNumber)
             isLive = true
         } catch {
             task.cancel()
+            connTask.cancel()
             if updateTask == task { updateTask = nil }
+            if connectionTask == connTask { connectionTask = nil }
             lastError = error
             throw error
         }
@@ -203,8 +245,11 @@ public final class LaMarzoccoMachine {
         liveGeneration += 1 // supersede the running task's teardown
         updateTask?.cancel()
         updateTask = nil
+        connectionTask?.cancel()
+        connectionTask = nil
         await client.disconnectWebSocket()
         isLive = false
+        isConnected = false
     }
 
     // MARK: - Commands (forward to client, with optimistic local updates)

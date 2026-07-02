@@ -54,8 +54,12 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
   `tokenTask`), the typed reads (`machines`/`dashboard`/`settings`/`schedule`/`statistics`),
   `executeCommand` (two-tier: awaits websocket confirmation when connected, else
   fire-and-forget), and the STOMP websocket (connect/subscribe/heartbeat/reconnect →
-  `AsyncStream<DashboardUpdate>`). Tokens are **never persisted** — persisting
-  `installationKey` + `isRegistered` is the caller's job.
+  `AsyncStream<DashboardUpdate>`, plus `connectionEvents()` reporting every
+  connect/disconnect transition — the push feed is change-only, so consumers re-fetch
+  on `.connected`). STOMP `heart-beat` stays `0,0` (upstream parity); liveness is a
+  websocket-level ping whose pong deadline (half the heartbeat interval, as in
+  aiohttp) force-closes zombie sockets so the reconnect loop fires. Tokens are
+  **never persisted** — persisting `installationKey` + `isRegistered` is the caller's job.
 
 - **`Models.swift`** — `Machine`, `PowerState`, `LaMarzoccoError` (`LocalizedError`).
 - **`Enums.swift`** — `Model`/`DeviceType` + machine/dose/boiler/grinder enums, the
@@ -80,9 +84,11 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
 
 - **`LaMarzoccoMachine.swift`** — `@MainActor @Observable`. Retains `dashboard`/`settings`/
   `schedule`/`statistics`, refreshes-and-stores, iterates the websocket `AsyncStream` (merging
-  into `dashboard`), forwards commands with optimistic local updates, and gates model-specific
-  commands (`LaMarzoccoError.unsupportedModel`). `isLive` tracks the *subscription* (start→stop),
-  `lastError` is cleared on the next success.
+  into `dashboard`), re-fetches the dashboard after every reconnect (change-only feed —
+  transitions missed during a gap are never re-pushed), forwards commands with optimistic
+  local updates, and gates model-specific commands (`LaMarzoccoError.unsupportedModel`).
+  `isLive` tracks the *subscription* (start→stop) while `isConnected`/`lastUpdateAt` report
+  actual socket health and freshness; `lastError` is cleared on the next success.
 - **`MachineSnapshot.swift`** — `Codable {serialNumber, dashboard?, settings?, schedule?}` for
   stale-on-launch UI (recognized widgets round-trip losslessly; unknown widgets keep code/index
   but lose their raw payload).
@@ -109,8 +115,11 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.1 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
+v1.2 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
-observable device layer. Adds the `angcli` wire-debugging tool, a porting-watermark +
-drift-detection workflow, and a DocC documentation site. Bluetooth remains out of scope.
+observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
+drift-detection workflow, and a DocC documentation site. v1.2 adds websocket resilience
+for connection gaps (sleep/network drops): enforced ping/pong liveness that self-heals
+zombie sockets, `connectionEvents()` on the client, and automatic dashboard re-fetch on
+reconnect + `isConnected`/`lastUpdateAt` in `AngstromUI`. Bluetooth remains out of scope.

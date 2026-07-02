@@ -7,8 +7,12 @@ An observable device layer over the Angstrom cloud client, for SwiftUI.
 `AngstromUI` wraps the stateless `Angstrom` core in a `@MainActor @Observable`
 ``LaMarzoccoMachine`` you can bind directly in SwiftUI. It retains
 `dashboard`/`settings`/`schedule`/`statistics`, iterates the live websocket and
-merges pushes into `dashboard`, forwards commands with optimistic local updates,
-and gates model-specific commands behind `LaMarzoccoError.unsupportedModel`.
+merges pushes into `dashboard` (re-fetching the dashboard after every reconnect,
+since the push feed is change-only), forwards commands with optimistic local
+updates, and gates model-specific commands behind
+`LaMarzoccoError.unsupportedModel`. `isConnected` and `lastUpdateAt` report
+actual socket health and data freshness, alongside `isLive`'s
+subscription intent.
 
 ```swift
 import AngstromUI

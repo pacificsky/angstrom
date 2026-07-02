@@ -272,6 +272,52 @@ final class WebSocketTests: XCTestCase {
         await client.disconnectWebSocket()
     }
 
+    // MARK: Heartbeat enforcement (zombie-socket recovery)
+
+    /// A heartbeat ping that *fails* must tear the channel down so the
+    /// maintenance loop reconnects — a swallowed ping error would leave a dead
+    /// socket reported as connected forever (the post-sleep zombie scenario).
+    func testPingFailureForcesReconnect() async throws {
+        let channelA = MockWebSocketChannel()
+        channelA.pingBehavior = .fail(URLError(.networkConnectionLost))
+        let channelB = MockWebSocketChannel()
+        let vendor = ChannelVendor([channelA, channelB])
+        let client = makeClient(authBackend())
+        await client.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                  heartbeatInterval: .milliseconds(20),
+                                                  reconnectBackoff: .milliseconds(10))
+        await client.setWebSocketFactoryForTesting { _ in vendor.next() }
+
+        channelA.push(connectedFrame())
+        channelB.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+
+        try await waitUntil("reconnect after failed ping") { channelB.sentFrame(command: "SUBSCRIBE") != nil }
+        await client.disconnectWebSocket()
+    }
+
+    /// A ping whose pong never arrives (half-open zombie: the local FD looks
+    /// alive but the peer is gone) must be treated as a dead connection after
+    /// the pong timeout, tearing the channel down so the loop reconnects.
+    func testPingPongTimeoutForcesReconnect() async throws {
+        let channelA = MockWebSocketChannel()
+        channelA.pingBehavior = .hang
+        let channelB = MockWebSocketChannel()
+        let vendor = ChannelVendor([channelA, channelB])
+        let client = makeClient(authBackend())
+        await client.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                  heartbeatInterval: .milliseconds(20),
+                                                  reconnectBackoff: .milliseconds(10))
+        await client.setWebSocketFactoryForTesting { _ in vendor.next() }
+
+        channelA.push(connectedFrame())
+        channelB.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+
+        try await waitUntil("reconnect after missing pong") { channelB.sentFrame(command: "SUBSCRIBE") != nil }
+        await client.disconnectWebSocket()
+    }
+
     func testHeartbeatPings() async throws {
         let channel = MockWebSocketChannel()
         let client = makeClient(authBackend())
@@ -283,6 +329,61 @@ final class WebSocketTests: XCTestCase {
         try await client.connectWebSocket(serial: "SN1")
         try await waitUntil("heartbeat ping") { channel.pingCount >= 1 }
         await client.disconnectWebSocket()
+    }
+
+    // MARK: Connection events
+
+    /// The connection-event stream reports every transition: `.connected` on the
+    /// initial subscribe, `.disconnected` when the socket drops, and `.connected`
+    /// again after the automatic reconnect — the signal a consumer needs to
+    /// re-fetch state missed during the gap (the feed itself is change-only).
+    func testConnectionEventsAcrossDropAndReconnect() async throws {
+        let channelA = MockWebSocketChannel()
+        let channelB = MockWebSocketChannel()
+        let vendor = ChannelVendor([channelA, channelB])
+        let client = makeClient(authBackend())
+        await client.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                  heartbeatInterval: .seconds(60),
+                                                  reconnectBackoff: .milliseconds(10))
+        await client.setWebSocketFactoryForTesting { _ in vendor.next() }
+        // Register before connecting so the initial transition is observed.
+        let events = await client.connectionEvents()
+        var iterator = events.makeAsyncIterator()
+
+        channelA.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+        let first = await iterator.next()
+        XCTAssertEqual(first, .connected)
+
+        channelB.push(connectedFrame())
+        channelA.close()
+        let second = await iterator.next()
+        XCTAssertEqual(second, .disconnected)
+        let third = await iterator.next()
+        XCTAssertEqual(third, .connected)
+
+        await client.disconnectWebSocket()
+    }
+
+    /// `disconnectWebSocket()` emits a final `.disconnected` and finishes the
+    /// event streams, so consumers' iteration loops end cleanly.
+    func testConnectionEventStreamFinishesOnDisconnect() async throws {
+        let channel = MockWebSocketChannel()
+        let client = makeClient(authBackend())
+        await client.setWebSocketFactoryForTesting { _ in channel }
+        let events = await client.connectionEvents()
+        var iterator = events.makeAsyncIterator()
+
+        channel.push(connectedFrame())
+        try await client.connectWebSocket(serial: "SN1")
+        let first = await iterator.next()
+        XCTAssertEqual(first, .connected)
+
+        await client.disconnectWebSocket()
+        let second = await iterator.next()
+        XCTAssertEqual(second, .disconnected)
+        let end = await iterator.next()
+        XCTAssertNil(end, "stream must finish after disconnectWebSocket()")
     }
 
     // MARK: DashboardUpdate + merge

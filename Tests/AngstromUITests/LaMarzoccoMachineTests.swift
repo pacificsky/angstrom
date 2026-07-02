@@ -67,6 +67,29 @@ final class LaMarzoccoMachineTests: XCTestCase {
         Stomp.encode(.message, headers: [("destination", "/ws/sn/\(serial)/dashboard")], body: json)
     }
 
+    private func connectedFrame() -> String { Stomp.encode(.connected, headers: [("version", "1.2")]) }
+
+    /// Vends a fixed sequence of channels (then fresh ones), for reconnect tests.
+    private final class ChannelVendor: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queue: [MockWebSocketChannel]
+        init(_ channels: [MockWebSocketChannel]) { queue = channels }
+        func next() -> MockWebSocketChannel {
+            lock.withLock { queue.isEmpty ? MockWebSocketChannel() : queue.removeFirst() }
+        }
+    }
+
+    /// A brewing machine-status push, used to make local state diverge from the
+    /// standby REST fixture.
+    private var brewingPush: String {
+        messageFrame("""
+        { "connected": true, "removedWidgets": [], "commands": [],
+          "widgets": [ { "code": "CMMachineStatus", "index": 1,
+            "output": { "status": "PoweredOn", "availableModes": ["BrewingMode","StandBy"],
+                        "mode": "BrewingMode", "nextStatus": null, "brewingStartTime": null } } ] }
+        """)
+    }
+
     // MARK: - Refresh
 
     func testRefreshAllPopulatesState() async throws {
@@ -124,6 +147,90 @@ final class LaMarzoccoMachineTests: XCTestCase {
         try await waitUntil("dashboard merges push") { machine.dashboard?.machineStatus?.mode == .brewing }
         await machine.stop()
         XCTAssertFalse(machine.isLive)
+    }
+
+    /// The push feed is change-only, so a state transition that happens while
+    /// the socket is down is never re-pushed. After every automatic reconnect
+    /// the machine must re-fetch the dashboard snapshot so state missed during
+    /// the gap is reconciled (the stale "heating up for hours" bug).
+    func testReconnectRefreshesDashboard() async throws {
+        let backend = try fixtureBackend()
+        let machine = makeMachine(backend)
+        try await machine.refreshDashboard() // fixture: standby
+        let channelA = MockWebSocketChannel()
+        let channelB = MockWebSocketChannel()
+        let vendor = ChannelVendor([channelA, channelB])
+        await machine.clientForTesting.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                                    heartbeatInterval: .seconds(60),
+                                                                    reconnectBackoff: .milliseconds(10))
+        await machine.clientForTesting.setWebSocketFactoryForTesting { _ in vendor.next() }
+        channelA.push(connectedFrame())
+        try await machine.start()
+        let fetchesBeforeDrop = backend.count(pathSuffix: "/dashboard")
+
+        // Diverge local state from the REST fixture, as a missed transition would.
+        channelA.push(brewingPush)
+        try await waitUntil("push merged") { machine.dashboard?.machineStatus?.mode == .brewing }
+
+        // Drop the socket; the reconnect must trigger a REST re-fetch that
+        // replaces the stale merged state with the fixture snapshot.
+        channelB.push(connectedFrame())
+        channelA.close()
+        try await waitUntil("dashboard re-fetched on reconnect") {
+            machine.dashboard?.machineStatus?.mode == .standby
+        }
+        XCTAssertGreaterThan(backend.count(pathSuffix: "/dashboard"), fetchesBeforeDrop)
+        await machine.stop()
+    }
+
+    /// ``isConnected`` reflects actual socket health across silent drops, while
+    /// ``isLive`` keeps reporting subscription intent — so UIs can distinguish
+    /// "live" from "subscribed but stale".
+    func testIsConnectedTracksSocketState() async throws {
+        let machine = makeMachine(try fixtureBackend())
+        try await machine.refreshDashboard()
+        XCTAssertFalse(machine.isConnected)
+
+        let channelA = MockWebSocketChannel()
+        let vendor = ChannelVendor([channelA]) // reconnect attempts get fresh, never-completing channels
+        await machine.clientForTesting.setWebSocketTimingForTesting(commandTimeout: .seconds(10),
+                                                                    heartbeatInterval: .seconds(60),
+                                                                    reconnectBackoff: .milliseconds(10))
+        await machine.clientForTesting.setWebSocketFactoryForTesting { _ in vendor.next() }
+        channelA.push(connectedFrame())
+        try await machine.start()
+        try await waitUntil("connected") { machine.isConnected }
+        XCTAssertTrue(machine.isLive)
+
+        // Drop the socket; the replacement channel never completes its
+        // handshake, so the machine must report disconnected while still live.
+        channelA.close()
+        try await waitUntil("disconnect observed") { !machine.isConnected }
+        XCTAssertTrue(machine.isLive, "isLive tracks the subscription, not the socket")
+
+        await machine.stop()
+        XCTAssertFalse(machine.isConnected)
+        XCTAssertFalse(machine.isLive)
+    }
+
+    /// ``lastUpdateAt`` stamps every applied dashboard state — REST refreshes and
+    /// merged pushes — so UIs can honestly show "last update Nm ago".
+    func testLastUpdateAtStampsRefreshAndPush() async throws {
+        let machine = makeMachine(try fixtureBackend())
+        XCTAssertNil(machine.lastUpdateAt)
+
+        try await machine.refreshDashboard()
+        let afterRefresh = try XCTUnwrap(machine.lastUpdateAt)
+
+        let channel = MockWebSocketChannel()
+        await machine.clientForTesting.setWebSocketFactoryForTesting { _ in channel }
+        channel.push(connectedFrame())
+        try await machine.start()
+        channel.push(brewingPush)
+        try await waitUntil("push merged") { machine.dashboard?.machineStatus?.mode == .brewing }
+        let afterPush = try XCTUnwrap(machine.lastUpdateAt)
+        XCTAssertGreaterThanOrEqual(afterPush, afterRefresh)
+        await machine.stop()
     }
 
     // MARK: - Optimistic command updates

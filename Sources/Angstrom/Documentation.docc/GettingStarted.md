@@ -78,6 +78,20 @@ for await update in client.dashboardUpdates() {
 }
 ```
 
+The push feed is **change-only** — subscribing delivers no snapshot, so any
+transition that happens while the socket is down is never re-pushed. Observe
+``LaMarzoccoCloudClient/connectionEvents()`` and re-fetch the dashboard on each
+`.connected` to reconcile state missed during a gap (`LaMarzoccoMachine` in
+`AngstromUI` does this for you):
+
+```swift
+for await event in client.connectionEvents() {
+    if event == .connected {
+        dashboard = try await client.dashboard(serial: serial)
+    }
+}
+```
+
 ### Next: the observable device layer
 
 If you're building SwiftUI, reach for `LaMarzoccoMachine` in the `AngstromUI`
