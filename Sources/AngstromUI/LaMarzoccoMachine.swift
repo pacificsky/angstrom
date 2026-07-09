@@ -92,7 +92,33 @@ public final class LaMarzoccoMachine {
         dashboard?.machine.model ?? settings?.machine.model ?? schedule?.machine.model
     }
 
+    /// Whether the *machine* is reachable from La Marzocco's cloud — distinct
+    /// from ``isConnected``, which reports *our* websocket. `nil` until the
+    /// first ``dashboard`` exists, then tracks the dashboard's `connected` flag
+    /// through REST refreshes and websocket pushes.
+    ///
+    /// When the machine drops off the cloud (switched off, unplugged, lost
+    /// Wi-Fi), the server keeps serving a husk dashboard whose status widget is
+    /// frozen at the machine's last-reported mode — so ``powerState`` keeps
+    /// reporting that stale mode. UIs must gate power/status displays on this
+    /// flag. Note: routine pushes carry `connected: true`, but a push announcing
+    /// the *disconnect* has not been observed in wire captures — until confirmed,
+    /// assume a machine going offline is only discovered on the next REST
+    /// refresh (e.g. ``refreshDashboard()``), not via the live feed.
+    public var isMachineConnected: Bool? { dashboard?.machine.isConnected }
+
+    /// When the machine last (re)connected to La Marzocco's cloud, per the
+    /// dashboard's `connectionDate`. While ``isMachineConnected`` is `false`
+    /// this is the moment of the *last* connection — i.e. how stale the frozen
+    /// dashboard is. `nil` until the first ``dashboard`` exists.
+    public var machineLastConnectionDate: Date? { dashboard?.machine.connectionDate }
+
     /// Power state derived from the dashboard's machine- or grinder-status widget.
+    ///
+    /// This is the machine's *last-reported* mode: while ``isMachineConnected``
+    /// is `false` the underlying widget is frozen at whatever the machine said
+    /// before it dropped off the cloud, so this value is stale — gate on
+    /// ``isMachineConnected`` before presenting it as live status.
     public var powerState: PowerState {
         if let mode = dashboard?.machineStatus?.mode {
             switch mode {

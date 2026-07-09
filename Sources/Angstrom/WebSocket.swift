@@ -132,15 +132,20 @@ public struct RemovedWidget: Sendable, Hashable, Codable {
 extension Dashboard {
     /// Return a new dashboard with `update` applied: widgets are replaced by
     /// `(code, index)`, removed widgets are dropped, and new widgets appended —
-    /// preserving existing order. The machine identity is retained.
+    /// preserving existing order. The machine identity is retained, except for
+    /// connectivity: ``Machine/isConnected`` takes the push's `connected` flag
+    /// (every routine push carries `true`, so this self-heals in both
+    /// directions) and ``Machine/connectionDate`` is updated when the push
+    /// carries one.
     ///
     /// This **intentionally diverges** from pylamarzocco's
-    /// `_websocket_dashboard_update_received`, which replaces the widget set
-    /// wholesale (`self.dashboard.widgets = config.widgets`) and ignores
+    /// `_websocket_dashboard_update_received`, which replaces the whole
+    /// dashboard config on push — including `connected` — and ignores
     /// `removedWidgets`. That relies on every push being a complete snapshot; the
     /// incremental merge here honors the protocol's explicit `removedWidgets`
     /// envelope and tolerates a partial frame without dropping widgets the push
-    /// didn't mention. Both behave identically on a full-snapshot push.
+    /// didn't mention. Both behave identically on a full-snapshot push, and the
+    /// connectivity flag flows through either way.
     public func applying(_ update: DashboardUpdate) -> Dashboard {
         func key(_ widget: Widget) -> String { "\(widget.code)#\(widget.index)" }
 
@@ -158,6 +163,9 @@ extension Dashboard {
             order.removeAll { $0 == k }
             byKey[k] = nil
         }
+        var machine = machine
+        machine.isConnected = update.connected
+        if let connectionDate = update.connectionDate { machine.connectionDate = connectionDate }
         return Dashboard(machine: machine, widgets: order.compactMap { byKey[$0] })
     }
 }

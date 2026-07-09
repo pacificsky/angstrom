@@ -116,11 +116,16 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.2 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
+v1.3 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
 observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
-drift-detection workflow, and a DocC documentation site. v1.2 adds websocket resilience
+drift-detection workflow, and a DocC documentation site. v1.2 added websocket resilience
 for connection gaps (sleep/network drops): enforced ping/pong liveness that self-heals
 zombie sockets, `connectionEvents()` on the client, and automatic dashboard re-fetch on
-reconnect + `isConnected`/`lastUpdateAt` in `AngstromUI`. Bluetooth remains out of scope.
+reconnect + `isConnected`/`lastUpdateAt` in `AngstromUI`. v1.3 propagates the machine's
+cloud-reachability (`connected`/`connectionDate`) through the websocket merge — when a
+machine drops off the cloud the server serves a frozen "husk" dashboard, and the
+`connected` flag is the authoritative offline signal — and adds
+`isMachineConnected`/`machineLastConnectionDate` to `AngstromUI` so UIs can gate the
+otherwise-stale `powerState`. Bluetooth remains out of scope.
