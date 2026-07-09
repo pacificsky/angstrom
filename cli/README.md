@@ -104,6 +104,20 @@ Watch only Angstrom's decoded view, pretty-printed with `jq`:
 swift run angcli listen --decoded | jq .decoded
 ```
 
+**Findings & open questions** (from captures with this tool):
+
+- Every routine dashboard push carries top-level `"connected": true`. When a
+  machine drops off the cloud (switched off / lost Wi-Fi), REST `dump dashboard`
+  serves a "husk": `"connected": false`, `connectionDate` frozen at the last
+  connect, and the widget list reduced to a single stale `CMMachineStatus`.
+- **Open:** does the server *push* a frame at the moment a machine disconnects
+  (e.g. `connected: false` with `removedWidgets` for the live widgets), or does
+  the topic just go silent? No disconnect push has been observed in captures.
+  To settle it, run `listen` while flipping the machine's power switch and
+  watch for a frame; record the answer here and in [`UPSTREAM.md`](../UPSTREAM.md).
+  Until confirmed, consumers should assume offline is only discoverable via a
+  REST re-read of the dashboard.
+
 ---
 
 ### `dump <endpoint>`

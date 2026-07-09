@@ -454,6 +454,32 @@ final class WebSocketTests: XCTestCase {
         XCTAssertEqual(update.removedWidgetCodes, ["CMNoWater"])
     }
 
+    /// The connectivity flag must flow through the push merge: a
+    /// `connected: false` push flips `machine.isConnected` (and takes the
+    /// pushed `connectionDate`) while untouched widgets survive, and a later
+    /// `connected: true` push flips it back — otherwise the merged dashboard
+    /// could never report offline between REST refreshes.
+    func testDashboardApplyingPropagatesConnected() throws {
+        let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
+        XCTAssertTrue(base.machine.isConnected)
+        let widgetCount = base.widgets.count
+
+        let offline = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
+            #"{"connected":false,"connectionDate":1783565955166,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
+        let dropped = base.applying(offline)
+        XCTAssertFalse(dropped.machine.isConnected)
+        XCTAssertEqual(dropped.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
+        XCTAssertEqual(dropped.widgets.count, widgetCount, "a connectivity-only push must not drop widgets")
+        XCTAssertNotNil(dropped.coffeeBoiler)
+
+        let online = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
+            #"{"connected":true,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
+        let restored = dropped.applying(online)
+        XCTAssertTrue(restored.machine.isConnected)
+        XCTAssertEqual(restored.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166),
+                       "a push without connectionDate keeps the last-known date")
+    }
+
     func testDashboardApplyingMerge() throws {
         let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
         XCTAssertEqual(base.machineStatus?.mode, .standby)

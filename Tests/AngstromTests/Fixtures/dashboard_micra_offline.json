@@ -1,0 +1,102 @@
+{
+    "availableFirmwareUpdate": false,
+    "bleAuthToken": null,
+    "coffeeStation": {
+        "accessories": [
+            {
+                "batteryLevel": null,
+                "connected": false,
+                "imageUrl": null,
+                "imageUrlDetail": null,
+                "imageUrlList": null,
+                "name": "LMZ-123456",
+                "type": "ScaleAcaiaLunar"
+            }
+        ],
+        "coffeeMachine": {
+            "availableFirmwareUpdate": false,
+            "bleAuthToken": null,
+            "connected": false,
+            "connectionDate": 1783565955166,
+            "gatewayHw": "Esp32",
+            "imageUrl": "https://lion.lamarzocco.io/img/thing-model/list/lineamicra/lineamicra-1-c-bianco.png",
+            "imageUrlDetail": "https://lion.lamarzocco.io/img/thing-model/detail/lineamicra/lineamicra-1-c-bianco.png",
+            "imageUrlList": "https://lion.lamarzocco.io/img/thing-model/list/lineamicra/lineamicra-1-c-bianco.png",
+            "location": "HOME_OR_DWELLING_SPACE",
+            "modelCode": "LINEAMICRA",
+            "modelName": "LINEA MICRA",
+            "name": "MR123456",
+            "offlineMode": false,
+            "requireFirmwareUpdate": false,
+            "serialNumber": "MR123456",
+            "shotCounterSupported": true,
+            "type": "CoffeeMachine"
+        },
+        "grinders": [
+            {
+                "availableFirmwareUpdate": false,
+                "bleAuthToken": null,
+                "connected": true,
+                "connectionDate": 1783548252714,
+                "gatewayHw": "Esp32",
+                "imageUrl": "https://lion.lamarzocco.io/img/thing-model/list/picogrinder/picogrinder-c-bianco.png",
+                "imageUrlDetail": "https://lion.lamarzocco.io/img/thing-model/detail/picogrinder/picogrinder-c-bianco.png",
+                "imageUrlList": "https://lion.lamarzocco.io/img/thing-model/list/picogrinder/picogrinder-c-bianco.png",
+                "location": "HOME_OR_DWELLING_SPACE",
+                "modelCode": "PICOGRINDER",
+                "modelName": "PICO GRINDER",
+                "name": "GR123456",
+                "offlineMode": false,
+                "requireFirmwareUpdate": false,
+                "serialNumber": "GR123456",
+                "shotCounterSupported": false,
+                "type": "Grinder"
+            }
+        ],
+        "id": "00000000-0000-0000-0000-000000000000",
+        "name": "Home Station"
+    },
+    "connected": false,
+    "connectionDate": 1783565955166,
+    "gatewayHw": "Esp32",
+    "imageUrl": "https://lion.lamarzocco.io/img/thing-model/detail/lineamicra/lineamicra-1-c-bianco.png",
+    "imageUrlDetail": "https://lion.lamarzocco.io/img/thing-model/detail/lineamicra/lineamicra-1-c-bianco.png",
+    "imageUrlList": "https://lion.lamarzocco.io/img/thing-model/list/lineamicra/lineamicra-1-c-bianco.png",
+    "latestEndedCommands": [],
+    "location": "HOME_OR_DWELLING_SPACE",
+    "modelCode": "LINEAMICRA",
+    "modelName": "LINEA MICRA",
+    "name": "MR123456",
+    "offlineMode": false,
+    "requireFirmwareUpdate": false,
+    "runningCommands": [],
+    "serialNumber": "MR123456",
+    "shotCounterSupported": true,
+    "type": "CoffeeMachine",
+    "widgets": [
+        {
+            "code": "CMMachineStatus",
+            "index": 1,
+            "output": {
+                "availableModes": [
+                    "BrewingMode",
+                    "StandBy"
+                ],
+                "brewingStartTime": null,
+                "lastCoffee": null,
+                "lastFlush": {
+                    "doseIndex": "Continuous",
+                    "doseMode": "Continuous",
+                    "doseValue": null,
+                    "doseValueNumerator": null,
+                    "extractionSeconds": 1.062,
+                    "time": 1783534137202
+                },
+                "mode": "StandBy",
+                "nextStatus": null,
+                "status": "Off"
+            },
+            "tutorialUrl": null
+        }
+    ]
+}

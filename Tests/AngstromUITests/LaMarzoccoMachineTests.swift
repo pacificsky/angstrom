@@ -213,6 +213,37 @@ final class LaMarzoccoMachineTests: XCTestCase {
         XCTAssertFalse(machine.isLive)
     }
 
+    /// ``isMachineConnected`` reports whether the *machine* is reachable from
+    /// La Marzocco's cloud (distinct from ``isConnected``, our own socket):
+    /// `nil` until a dashboard exists, then tracks the `connected` flag through
+    /// REST refreshes and websocket pushes — while ``powerState`` keeps
+    /// reporting the frozen last-known mode, which UIs must gate on the flag.
+    func testIsMachineConnectedTracksCloudReachability() async throws {
+        let machine = makeMachine(try fixtureBackend())
+        XCTAssertNil(machine.isMachineConnected, "nil until the first dashboard")
+        XCTAssertNil(machine.machineLastConnectionDate)
+
+        try await machine.refreshDashboard()
+        XCTAssertEqual(machine.isMachineConnected, true) // micra fixture: connected
+
+        let channel = MockWebSocketChannel()
+        await machine.clientForTesting.setWebSocketFactoryForTesting { _ in channel }
+        channel.push(connectedFrame())
+        try await machine.start()
+
+        // The machine drops off the cloud: the push flips the flag while the
+        // frozen status widget keeps reporting the stale mode.
+        channel.push(messageFrame(
+            #"{"connected":false,"connectionDate":1783565955166,"widgets":[],"removedWidgets":[],"commands":[]}"#))
+        try await waitUntil("offline push applied") { machine.isMachineConnected == false }
+        XCTAssertEqual(machine.machineLastConnectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
+        XCTAssertEqual(machine.powerState, .off, "powerState still derives from the frozen widget")
+
+        channel.push(brewingPush) // routine push: carries connected:true
+        try await waitUntil("online push applied") { machine.isMachineConnected == true }
+        await machine.stop()
+    }
+
     /// ``lastUpdateAt`` stamps every applied dashboard state — REST refreshes and
     /// merged pushes — so UIs can honestly show "last update Nm ago".
     func testLastUpdateAtStampsRefreshAndPush() async throws {

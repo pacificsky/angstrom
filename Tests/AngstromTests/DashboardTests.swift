@@ -74,6 +74,22 @@ final class DashboardTests: XCTestCase {
         XCTAssertNotNil(d.preExtraction)
     }
 
+    // MARK: - Offline "husk" dashboard
+
+    /// When a machine drops off the cloud (switched off / lost Wi-Fi), the
+    /// server serves a husk: `connected: false`, `connectionDate` frozen at the
+    /// last connect, and the widget list reduced to a single stale
+    /// `CMMachineStatus` (captured live from a powered-off Micra). The husk must
+    /// decode cleanly — `isConnected` is the authoritative offline signal.
+    func testOfflineDashboardDecodes() throws {
+        let d = try dashboard("dashboard_micra_offline")
+        XCTAssertFalse(d.machine.isConnected)
+        XCTAssertEqual(d.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
+        XCTAssertEqual(d.widgets.count, 1, "the husk carries only the frozen machine status")
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        XCTAssertEqual(d.machineStatus?.mode, .standby) // frozen last-reported mode
+    }
+
     // MARK: - Resilience
 
     func testGrinderWidgetsDecode() throws {
