@@ -21,7 +21,8 @@ final class SettingsTests: XCTestCase {
         let schedule = try JSONDecoder.laMarzocco().decode(
             MachineSchedule.self, from: try Fixture.data("schedule"))
         XCTAssertEqual(schedule.autoStandBy, "00:30")
-        XCTAssertEqual(schedule.autoOnOff, "00:30")
+        XCTAssertEqual(schedule.autoOnOff, .mode("00:30"))
+        XCTAssertEqual(schedule.autoOnOff?.modeString, "00:30")
         XCTAssertFalse(schedule.wakeUpSchedules.isEmpty)
         let first = try XCTUnwrap(schedule.wakeUpSchedules.first)
         XCTAssertEqual(first.id, "KofUy56")
@@ -29,6 +30,50 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(first.offTimeMinutes, 514)
         XCTAssertTrue(first.steamBoiler)
         XCTAssertEqual(first.days, [.tuesday])
+    }
+
+    /// The Strada X scheduling payload (upstream v2.4.2): `autoOnOff` arrives
+    /// as an *object* (a mode string on other machines — the union mirrors
+    /// upstream's `str | AutoOnOff | None`), `ecoMode` is present, and
+    /// `smartWakeUpSleep` is `null` — coerced to the empty default.
+    func testStradaScheduleDecodes() throws {
+        let schedule = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: try Fixture.data("schedule_strada"))
+        XCTAssertEqual(schedule.machine.model, .stradaX)
+        XCTAssertTrue(schedule.autoOnOffSupported)
+        XCTAssertNil(schedule.autoOnOff?.modeString, "the object form carries no mode string")
+        let autoOnOff = try XCTUnwrap(schedule.autoOnOff?.settings)
+        XCTAssertTrue(autoOnOff.enabled)
+        XCTAssertEqual(autoOnOff.onTimeMinutes, 360)
+        XCTAssertEqual(autoOnOff.offTimeMinutes, 1080)
+        XCTAssertNotNil(autoOnOff.ecoMode)
+        XCTAssertTrue(schedule.ecoModeSupported)
+        let eco = try XCTUnwrap(schedule.ecoMode)
+        XCTAssertEqual(eco.offset, 10)
+        XCTAssertEqual(eco.timeoutMinutes, 120)
+        XCTAssertEqual(schedule.wakeUpSchedules, [], "null smartWakeUpSleep coerces to the empty default")
+    }
+
+    /// On machines that send the mode string, the union decodes `.mode` and
+    /// the settings accessor stays nil.
+    func testAutoOnOffStringFormStillDecodes() throws {
+        let schedule = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: try Fixture.data("schedule"))
+        XCTAssertEqual(schedule.autoOnOff, .mode("00:30"))
+        XCTAssertNil(schedule.autoOnOff?.settings)
+    }
+
+    func testStradaSettingsDecode() throws {
+        let settings = try JSONDecoder.laMarzocco().decode(
+            MachineSettings.self, from: try Fixture.data("settings_strada"))
+        XCTAssertEqual(settings.machine.model, .stradaX)
+        XCTAssertEqual(settings.firmware.count, 3)
+        XCTAssertEqual(settings.machineFirmware?.buildVersion, "v2.2.0")
+        // The Strada X reports a third firmware component, type "File", whose
+        // changeLog is null — both new in upstream v2.4.2.
+        let file = try XCTUnwrap(settings.firmware.first { $0.type == .file })
+        XCTAssertEqual(file.buildVersion, "v17")
+        XCTAssertNil(file.changeLog)
     }
 
     func testSettingsResilienceDefaults() throws {

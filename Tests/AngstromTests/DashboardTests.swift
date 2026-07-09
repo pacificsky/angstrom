@@ -74,6 +74,72 @@ final class DashboardTests: XCTestCase {
         XCTAssertNotNil(d.preExtraction)
     }
 
+    // MARK: - Strada X / Swan (upstream v2.4.2 port)
+
+    func testStradaXWidgetsAllDecode() throws {
+        let d = try dashboard("dashboard_stradax")
+        XCTAssertEqual(d.machine.model, .stradaX)
+        XCTAssertEqual(d.machine.modelName, "Strada X")
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        // The Strada X reports CMMachineGroupStatus instead of CMMachineStatus.
+        XCTAssertNil(d.machineStatus)
+        XCTAssertEqual(d.machineGroupStatus?.mode, .standby)
+        XCTAssertEqual(d.machineGroupStatus?.availableModes, [.brewing, .standby, .eco])
+        XCTAssertEqual(d.coffeeBoiler?.targetTemperature, 93.0)
+        XCTAssertNotNil(d.steamBoilerTemperature)
+        XCTAssertEqual(d.groupDoses?.mode, .manual)
+        XCTAssertEqual(d.autoFlush?.enabled, true)
+        XCTAssertEqual(d.steamFlush?.enabled, true)
+        XCTAssertEqual(d.rinseFlush?.timeSeconds, 3.0)
+    }
+
+    /// The mass/brew-ratio dose lists and the brewing-pressure object (which
+    /// used to be mistyped as a string and silently decode to nil).
+    func testStradaGroupDosesDecode() throws {
+        let d = try dashboard("dashboard_strada")
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        let g = try XCTUnwrap(d.groupDoses)
+        XCTAssertEqual(g.mode, .mass)
+        XCTAssertTrue(g.availableModes.contains(.brewRatio))
+        XCTAssertEqual(g.doses.massType.count, 4)
+        XCTAssertEqual(g.doses.brewRatioType.count, 4)
+        XCTAssertEqual(g.doses.pulsesType.count, 4)
+        let pressure = try XCTUnwrap(g.brewingPressure)
+        XCTAssertEqual(pressure.pressure, 9)
+        XCTAssertEqual(pressure.pressureMax, 12)
+        XCTAssertEqual(d.hotWaterDose?.doses.count, 2)
+        XCTAssertEqual(d.hotWaterDose?.doses.first?.dose, 8.33)
+    }
+
+    /// Profile-mode dosing: the selected-profile object with its graph.
+    func testStradaProfileDosesDecode() throws {
+        let d = try dashboard("dashboard_strada_profile")
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        let g = try XCTUnwrap(d.groupDoses)
+        XCTAssertEqual(g.mode, .profile)
+        let p = try XCTUnwrap(g.profile)
+        XCTAssertEqual(p.selectedProfile, 15)
+        XCTAssertEqual(p.numberOfProfiles, 15)
+        XCTAssertEqual(p.mass, 47.5)
+        XCTAssertEqual(p.time, 32.1)
+        XCTAssertFalse(try XCTUnwrap(p.graph).x.isEmpty)
+    }
+
+    func testSwanWidgetsAllDecode() throws {
+        let d = try dashboard("dashboard_swan")
+        XCTAssertEqual(d.machine.model, .swan)
+        XCTAssertEqual(d.machine.type, .grinder)
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        XCTAssertEqual(d.grinderStatus?.status, .poweredOn)
+        XCTAssertEqual(d.grinderStatus?.mode, .grinding)
+        XCTAssertEqual(d.grinderDoses?.mode, .rev)
+        XCTAssertEqual(d.grinderDoses?.doses.revType.first?.dose, 9.5)
+        XCTAssertEqual(d.grinderSpeed?.doses["DoseA"]?.level, .medium)
+        XCTAssertEqual(d.grinderSpeed?.doses["DoseB"]?.level, .high)
+        XCTAssertEqual(d.grinderMoreDose?.revolutions, 1.0)
+        XCTAssertEqual(d.grinderGrindWith?.mode, .byButton)
+    }
+
     // MARK: - Offline "husk" dashboard
 
     /// When a machine drops off the cloud (switched off / lost Wi-Fi), the

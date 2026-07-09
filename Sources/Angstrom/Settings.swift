@@ -100,8 +100,14 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
     public let smartStandbySupported: Bool
     public let autoStandBy: String?
     public let autoStandBySupported: Bool
-    public let autoOnOff: String?
+    /// Auto on/off configuration. Most machines send a mode string
+    /// (`"HH:MM"`/`"Off"`); the Strada X sends a settings object — mirroring
+    /// pylamarzocco's `str | AutoOnOff | None` union.
+    public let autoOnOff: AutoOnOff?
     public let autoOnOffSupported: Bool
+    /// Eco-mode configuration (Strada X).
+    public let ecoMode: EcoMode?
+    public let ecoModeSupported: Bool
 
     /// The configured wake-up schedules.
     public var wakeUpSchedules: [WakeUpSchedule] { smartWakeUpSleep.schedules }
@@ -109,6 +115,7 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
     private enum CodingKeys: String, CodingKey {
         case smartWakeUpSleep, smartWakeUpSleepSupported, smartStandBy, smartStandBySupported
         case autoStandBy, autoStandBySupported, autoOnOff, autoOnOffSupported
+        case ecoMode, ecoModeSupported
     }
 
     public init(from decoder: Decoder) throws {
@@ -123,8 +130,10 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         smartStandbySupported = (try? c.decode(Bool.self, forKey: .smartStandBySupported)) ?? false
         autoStandBy = (try? c.decodeIfPresent(String.self, forKey: .autoStandBy)) ?? nil
         autoStandBySupported = (try? c.decode(Bool.self, forKey: .autoStandBySupported)) ?? false
-        autoOnOff = (try? c.decodeIfPresent(String.self, forKey: .autoOnOff)) ?? nil
+        autoOnOff = (try? c.decodeIfPresent(AutoOnOff.self, forKey: .autoOnOff)) ?? nil
         autoOnOffSupported = (try? c.decode(Bool.self, forKey: .autoOnOffSupported)) ?? false
+        ecoMode = (try? c.decodeIfPresent(EcoMode.self, forKey: .ecoMode)) ?? nil
+        ecoModeSupported = (try? c.decode(Bool.self, forKey: .ecoModeSupported)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -138,6 +147,100 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         try c.encode(autoStandBySupported, forKey: .autoStandBySupported)
         try c.encodeIfPresent(autoOnOff, forKey: .autoOnOff)
         try c.encode(autoOnOffSupported, forKey: .autoOnOffSupported)
+        try c.encodeIfPresent(ecoMode, forKey: .ecoMode)
+        try c.encode(ecoModeSupported, forKey: .ecoModeSupported)
+    }
+}
+
+/// Auto on/off, which the cloud sends in two shapes: a plain `"HH:MM"`/`"Off"`
+/// mode string on most machines, or a full ``AutoOnOffSettings`` object on the
+/// Strada X. Mirrors pylamarzocco's `str | AutoOnOff | None` union.
+public enum AutoOnOff: Sendable, Hashable, Codable {
+    case mode(String)
+    case settings(AutoOnOffSettings)
+
+    /// The mode string, when the machine sent the string form.
+    public var modeString: String? {
+        if case .mode(let value) = self { return value }
+        return nil
+    }
+
+    /// The settings object, when the machine sent the object form (Strada X).
+    public var settings: AutoOnOffSettings? {
+        if case .settings(let value) = self { return value }
+        return nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let string = try? c.decode(String.self) {
+            self = .mode(string)
+        } else {
+            self = .settings(try c.decode(AutoOnOffSettings.self))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .mode(let value): try c.encode(value)
+        case .settings(let value): try c.encode(value)
+        }
+    }
+}
+
+/// Auto on/off settings, as sent by the Strada X.
+public struct AutoOnOffSettings: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public let onTimeMinutes: Int
+    public let offTimeMinutes: Int
+    public let closeDay: String?
+    public let ecoModeSupported: Bool
+    public let ecoMode: EcoMode?
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, onTimeMinutes, offTimeMinutes, closeDay, ecoModeSupported, ecoMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+        onTimeMinutes = (try? c.decode(Int.self, forKey: .onTimeMinutes)) ?? 0
+        offTimeMinutes = (try? c.decode(Int.self, forKey: .offTimeMinutes)) ?? 0
+        closeDay = (try? c.decodeIfPresent(String.self, forKey: .closeDay)) ?? nil
+        ecoModeSupported = (try? c.decode(Bool.self, forKey: .ecoModeSupported)) ?? false
+        ecoMode = (try? c.decodeIfPresent(EcoMode.self, forKey: .ecoMode)) ?? nil
+    }
+}
+
+/// Eco-mode settings (Strada X).
+public struct EcoMode: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public let offset: Int
+    public let offsetMin: Int
+    public let offsetMax: Int
+    public let offsetStep: Int
+    public let timeoutMinutes: Int
+    public let timeoutMinutesMin: Int
+    public let timeoutMinutesMax: Int
+    public let timeoutMinutesStep: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, offset, offsetMin, offsetMax, offsetStep
+        case timeoutMinutes, timeoutMinutesMin, timeoutMinutesMax, timeoutMinutesStep
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+        offset = (try? c.decode(Int.self, forKey: .offset)) ?? 0
+        offsetMin = (try? c.decode(Int.self, forKey: .offsetMin)) ?? 0
+        offsetMax = (try? c.decode(Int.self, forKey: .offsetMax)) ?? 0
+        offsetStep = (try? c.decode(Int.self, forKey: .offsetStep)) ?? 0
+        timeoutMinutes = (try? c.decode(Int.self, forKey: .timeoutMinutes)) ?? 0
+        timeoutMinutesMin = (try? c.decode(Int.self, forKey: .timeoutMinutesMin)) ?? 0
+        timeoutMinutesMax = (try? c.decode(Int.self, forKey: .timeoutMinutesMax)) ?? 0
+        timeoutMinutesStep = (try? c.decode(Int.self, forKey: .timeoutMinutesStep)) ?? 0
     }
 }
 

@@ -114,6 +114,113 @@ final class CommandTests: XCTestCase {
         XCTAssertEqual(try body(backend, "CoffeeMachineSettingAutoOnOff")["schedule"] as? String, "00:30")
     }
 
+    // MARK: Strada X commands (upstream v2.4.2)
+
+    func testSetModeSendsRawMachineMode() async throws {
+        let backend = commandBackend()
+        try await client(backend).setMode(serial: "SN1", .eco)
+        XCTAssertEqual(try body(backend, "CoffeeMachineChangeMode")["mode"] as? String, "EcoMode")
+    }
+
+    func testFlushEnableCommands() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+        try await c.setAutoFlush(serial: "SN1", on: true)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingAutoFlushEnabled")["enabled"] as? Bool, true)
+        try await c.setSteamFlush(serial: "SN1", on: false)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingSteamFlushEnabled")["enabled"] as? Bool, false)
+        try await c.setRinseFlush(serial: "SN1", on: true)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingRinseFlushEnabled")["enabled"] as? Bool, true)
+        try await c.setRinseFlushTime(serial: "SN1", seconds: 3.456)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingRinseFlushTime")["timeSeconds"] as? Double, 3.5)
+    }
+
+    func testEnableToggleCommands() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+        try await c.setHotWaterDoseEnabled(serial: "SN1", on: true)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingHotWaterDoseEnabled")["enabled"] as? Bool, true)
+        try await c.setCupWarmer(serial: "SN1", on: true)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingCupWarmerEnabled")["enabled"] as? Bool, true)
+        try await c.setPlumbIn(serial: "SN1", on: false)
+        XCTAssertEqual(try body(backend, "CoffeeMachineSettingPlumbIn")["enabled"] as? Bool, false)
+        try await c.setCoffeeBoilerEnabled(serial: "SN1", on: true)
+        let boiler = try body(backend, "CoffeeMachineSettingCoffeeBoilerEnabled")
+        XCTAssertEqual(boiler["boilerIndex"] as? Int, 1)
+        XCTAssertEqual(boiler["enabled"] as? Bool, true)
+    }
+
+    func testGroupModeAndDoseCommands() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+        try await c.setGroupMode(serial: "SN1", .brewing)
+        let mode = try body(backend, "CoffeeMachineGroupChangeMode")
+        XCTAssertEqual(mode["groupIndex"] as? Int, 1)
+        XCTAssertEqual(mode["mode"] as? String, "BrewingMode")
+
+        try await c.setGroupDoseMode(serial: "SN1", .mass)
+        let doseMode = try body(backend, "CoffeeMachineGroupDoseChangeMode")
+        XCTAssertEqual(doseMode["mode"] as? String, "MassType")
+
+        try await c.setGroupDose(serial: "SN1", mode: .mass, doseIndex: .doseA, dose: 18.44)
+        let dose = try body(backend, "CoffeeMachineGroupDoseSettingDose")
+        XCTAssertEqual(dose["groupIndex"] as? Int, 1)
+        XCTAssertEqual(dose["mode"] as? String, "MassType")
+        XCTAssertEqual(dose["doseIndex"] as? String, "DoseA")
+        XCTAssertEqual(dose["dose"] as? Double, 18.4)
+
+        try await c.setHotWaterDose(serial: "SN1", dose: 7.85, doseIndex: .doseB)
+        let hot = try body(backend, "CoffeeMachineSettingHotWaterDose")
+        XCTAssertEqual(hot["doseIndex"] as? String, "DoseB")
+        XCTAssertEqual(hot["dose"] as? Double, 7.8) // round-half-to-even, like Python
+
+        try await c.setBrewingPressure(serial: "SN1", pressure: 9.02)
+        let pressure = try body(backend, "CoffeeMachineGroupDoseSettingGroupBrewingPressure")
+        XCTAssertEqual(pressure["groupIndex"] as? Int, 1)
+        XCTAssertEqual(pressure["pressure"] as? Double, 9.0)
+
+        try await c.setContinuousDoseEnabled(serial: "SN1", on: true)
+        XCTAssertEqual(try body(backend, "CoffeeMachineGroupDoseSettingContinuousDoseEnabled")["rinseEnabled"] as? Bool, true)
+        try await c.setContinuousDose(serial: "SN1", seconds: 4.26)
+        XCTAssertEqual(try body(backend, "CoffeeMachineGroupDoseSettingContinuousDose")["rinseSeconds"] as? Double, 4.3)
+
+        try await c.setMirrorGroup1(serial: "SN1", on: true)
+        let mirror = try body(backend, "CoffeeMachineGroupDoseSettingMirrorGroup1")
+        XCTAssertEqual(mirror["groupIndex"] as? Int, 2, "group 1 can't mirror itself; defaults to 2")
+        XCTAssertEqual(mirror["enabled"] as? Bool, true)
+    }
+
+    // MARK: Grinder commands (upstream v2.4.2)
+
+    func testGrinderModeAndSwanCommands() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+        try await c.setGrinderMode(serial: "G1", .grinding)
+        XCTAssertEqual(try body(backend, "GrinderChangeMode")["mode"] as? String, "GrindingMode")
+
+        try await c.setGrinderGrindWith(serial: "G1", .portafilter)
+        let grindWith = try body(backend, "GrinderSettingGrindWithMode")
+        XCTAssertEqual(grindWith["index"] as? Int, 1)
+        XCTAssertEqual(grindWith["mode"] as? String, "Portafilter")
+
+        try await c.setGrinderDose(serial: "G1", doseIndex: .doseA, dose: 9.5, mode: .rev, speedLevel: .high)
+        let dose = try body(backend, "GrinderSettingDose")
+        XCTAssertEqual(dose["index"] as? Int, 1)
+        XCTAssertEqual(dose["mode"] as? String, "RevType")
+        XCTAssertEqual(dose["doseIndex"] as? String, "DoseA")
+        XCTAssertEqual(dose["dose"] as? Double, 9.5)
+        XCTAssertEqual(dose["speedLevel"] as? String, "High")
+
+        try await c.setGrinderDose(serial: "G1", doseIndex: .doseB, dose: 3.0, mode: .time)
+        let noSpeed = try body(backend, "GrinderSettingDose")
+        XCTAssertNil(noSpeed["speedLevel"], "speedLevel key omitted when not provided")
+
+        try await c.setGrinderMoreDose(serial: "G1", revolutions: 1.5)
+        let more = try body(backend, "GrinderSettingMoreDose")
+        XCTAssertEqual(more["index"] as? Int, 1)
+        XCTAssertEqual(more["revolutions"] as? Double, 1.5)
+    }
+
     func testCommandReturnsResponse() async throws {
         let backend = commandBackend()
         let response = try await client(backend).setPower(serial: "SN1", on: true)
