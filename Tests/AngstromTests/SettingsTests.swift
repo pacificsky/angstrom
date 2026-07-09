@@ -21,7 +21,8 @@ final class SettingsTests: XCTestCase {
         let schedule = try JSONDecoder.laMarzocco().decode(
             MachineSchedule.self, from: try Fixture.data("schedule"))
         XCTAssertEqual(schedule.autoStandBy, "00:30")
-        XCTAssertEqual(schedule.autoOnOff, "00:30")
+        XCTAssertEqual(schedule.autoOnOff, .mode("00:30"))
+        XCTAssertEqual(schedule.autoOnOff?.modeString, "00:30")
         XCTAssertFalse(schedule.wakeUpSchedules.isEmpty)
         let first = try XCTUnwrap(schedule.wakeUpSchedules.first)
         XCTAssertEqual(first.id, "KofUy56")
@@ -32,15 +33,16 @@ final class SettingsTests: XCTestCase {
     }
 
     /// The Strada X scheduling payload (upstream v2.4.2): `autoOnOff` arrives
-    /// as an *object* (a mode string on other machines), `ecoMode` is present,
-    /// and `smartWakeUpSleep` is `null` — coerced to the empty default.
+    /// as an *object* (a mode string on other machines — the union mirrors
+    /// upstream's `str | AutoOnOff | None`), `ecoMode` is present, and
+    /// `smartWakeUpSleep` is `null` — coerced to the empty default.
     func testStradaScheduleDecodes() throws {
         let schedule = try JSONDecoder.laMarzocco().decode(
             MachineSchedule.self, from: try Fixture.data("schedule_strada"))
         XCTAssertEqual(schedule.machine.model, .stradaX)
-        XCTAssertNil(schedule.autoOnOff, "the object form doesn't populate the mode string")
         XCTAssertTrue(schedule.autoOnOffSupported)
-        let autoOnOff = try XCTUnwrap(schedule.autoOnOffSettings)
+        XCTAssertNil(schedule.autoOnOff?.modeString, "the object form carries no mode string")
+        let autoOnOff = try XCTUnwrap(schedule.autoOnOff?.settings)
         XCTAssertTrue(autoOnOff.enabled)
         XCTAssertEqual(autoOnOff.onTimeMinutes, 360)
         XCTAssertEqual(autoOnOff.offTimeMinutes, 1080)
@@ -52,13 +54,13 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(schedule.wakeUpSchedules, [], "null smartWakeUpSleep coerces to the empty default")
     }
 
-    /// On machines that send the mode string, ``MachineSchedule/autoOnOff``
-    /// keeps working and the object form stays nil.
+    /// On machines that send the mode string, the union decodes `.mode` and
+    /// the settings accessor stays nil.
     func testAutoOnOffStringFormStillDecodes() throws {
         let schedule = try JSONDecoder.laMarzocco().decode(
             MachineSchedule.self, from: try Fixture.data("schedule"))
-        XCTAssertEqual(schedule.autoOnOff, "00:30")
-        XCTAssertNil(schedule.autoOnOffSettings)
+        XCTAssertEqual(schedule.autoOnOff, .mode("00:30"))
+        XCTAssertNil(schedule.autoOnOff?.settings)
     }
 
     func testStradaSettingsDecode() throws {

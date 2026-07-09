@@ -100,15 +100,10 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
     public let smartStandbySupported: Bool
     public let autoStandBy: String?
     public let autoStandBySupported: Bool
-    /// Auto on/off as a mode string (`"HH:MM"`/`"Off"`), when the machine sends
-    /// the string form. The Strada X sends an object instead — see
-    /// ``autoOnOffSettings``. (pylamarzocco models this as one
-    /// string-or-object union field; the two properties here carry the same
-    /// information, exactly one non-nil when the key is present.)
-    public let autoOnOff: String?
-    /// Auto on/off as a settings object (Strada X), when the machine sends the
-    /// object form.
-    public let autoOnOffSettings: AutoOnOff?
+    /// Auto on/off configuration. Most machines send a mode string
+    /// (`"HH:MM"`/`"Off"`); the Strada X sends a settings object — mirroring
+    /// pylamarzocco's `str | AutoOnOff | None` union.
+    public let autoOnOff: AutoOnOff?
     public let autoOnOffSupported: Bool
     /// Eco-mode configuration (Strada X).
     public let ecoMode: EcoMode?
@@ -135,12 +130,7 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         smartStandbySupported = (try? c.decode(Bool.self, forKey: .smartStandBySupported)) ?? false
         autoStandBy = (try? c.decodeIfPresent(String.self, forKey: .autoStandBy)) ?? nil
         autoStandBySupported = (try? c.decode(Bool.self, forKey: .autoStandBySupported)) ?? false
-        // `autoOnOff` is a string on most machines and an object on the
-        // Strada X (upstream `str | AutoOnOff | None`): try both shapes.
-        autoOnOff = (try? c.decodeIfPresent(String.self, forKey: .autoOnOff)) ?? nil
-        autoOnOffSettings = autoOnOff == nil
-            ? (try? c.decodeIfPresent(AutoOnOff.self, forKey: .autoOnOff)) ?? nil
-            : nil
+        autoOnOff = (try? c.decodeIfPresent(AutoOnOff.self, forKey: .autoOnOff)) ?? nil
         autoOnOffSupported = (try? c.decode(Bool.self, forKey: .autoOnOffSupported)) ?? false
         ecoMode = (try? c.decodeIfPresent(EcoMode.self, forKey: .ecoMode)) ?? nil
         ecoModeSupported = (try? c.decode(Bool.self, forKey: .ecoModeSupported)) ?? false
@@ -155,20 +145,52 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         try c.encode(smartStandbySupported, forKey: .smartStandBySupported)
         try c.encodeIfPresent(autoStandBy, forKey: .autoStandBy)
         try c.encode(autoStandBySupported, forKey: .autoStandBySupported)
-        if let autoOnOff {
-            try c.encode(autoOnOff, forKey: .autoOnOff)
-        } else {
-            try c.encodeIfPresent(autoOnOffSettings, forKey: .autoOnOff)
-        }
+        try c.encodeIfPresent(autoOnOff, forKey: .autoOnOff)
         try c.encode(autoOnOffSupported, forKey: .autoOnOffSupported)
         try c.encodeIfPresent(ecoMode, forKey: .ecoMode)
         try c.encode(ecoModeSupported, forKey: .ecoModeSupported)
     }
 }
 
-/// Auto on/off settings, as sent by the Strada X (other machines send a plain
-/// `"HH:MM"`/`"Off"` mode string — see ``MachineSchedule/autoOnOff``).
-public struct AutoOnOff: Sendable, Hashable, Codable {
+/// Auto on/off, which the cloud sends in two shapes: a plain `"HH:MM"`/`"Off"`
+/// mode string on most machines, or a full ``AutoOnOffSettings`` object on the
+/// Strada X. Mirrors pylamarzocco's `str | AutoOnOff | None` union.
+public enum AutoOnOff: Sendable, Hashable, Codable {
+    case mode(String)
+    case settings(AutoOnOffSettings)
+
+    /// The mode string, when the machine sent the string form.
+    public var modeString: String? {
+        if case .mode(let value) = self { return value }
+        return nil
+    }
+
+    /// The settings object, when the machine sent the object form (Strada X).
+    public var settings: AutoOnOffSettings? {
+        if case .settings(let value) = self { return value }
+        return nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let string = try? c.decode(String.self) {
+            self = .mode(string)
+        } else {
+            self = .settings(try c.decode(AutoOnOffSettings.self))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .mode(let value): try c.encode(value)
+        case .settings(let value): try c.encode(value)
+        }
+    }
+}
+
+/// Auto on/off settings, as sent by the Strada X.
+public struct AutoOnOffSettings: Sendable, Hashable, Codable {
     public let enabled: Bool
     public let onTimeMinutes: Int
     public let offTimeMinutes: Int

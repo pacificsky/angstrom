@@ -25,12 +25,10 @@ already ported from what still needs picking up.
 
 As of this watermark the full cloud surface of `v2.4.2` is ported — there is no
 known cloud gap below this line. (Bluetooth-only changes upstream are out of
-scope and never advance this watermark.) Two modeling notes from the v2.4.2
-port: `MachineSchedule` represents upstream's `str | AutoOnOff | None` union as
-two properties (`autoOnOff` string / `autoOnOffSettings` object — same
-information, exactly one populated); and upstream's v2.4.2 pending-command
-leak fix (pylamarzocco #155) needed no port — Angstrom's `executeCommand`
-already checked the websocket before registering the pending wait.
+scope and never advance this watermark.) One note from the v2.4.2 port:
+upstream's pending-command leak fix (pylamarzocco #155) needed no port —
+Angstrom's `executeCommand` already checked the websocket before registering
+the pending wait.
 
 ### Websocket push semantics (wire findings)
 
