@@ -455,6 +455,20 @@ public struct DosePulses: Sendable, Hashable, Codable {
         brewRatioType = (try? c.decode([DoseSetting].self, forKey: .brewRatioType)) ?? []
         profileType = (try? c.decode([DoseSetting].self, forKey: .profileType)) ?? []
     }
+
+    /// The dose list for a mode; empty for modes that carry no per-dose lists
+    /// (`Continuous`, `Dose1`/`Dose2`, unknown) — mirroring pylamarzocco's
+    /// `DOSE_MODE_DOSES_ATTR` lookup.
+    public func settings(for mode: DoseMode) -> [DoseSetting] {
+        switch mode {
+        case .pulses: pulsesType
+        case .manual: manualType
+        case .mass: massType
+        case .brewRatio: brewRatioType
+        case .profile: profileType
+        case .continuous, .dose1, .dose2, .other: []
+        }
+    }
 }
 
 /// The selected brewing profile of a group (`CMGroupDoses.profile`, Strada X).

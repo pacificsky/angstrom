@@ -460,20 +460,44 @@ public final class LaMarzoccoMachine {
         return response
     }
 
+    /// Set a group's dose mode. Throws `LaMarzoccoError.operationNotAvailable`
+    /// when the cached widget reports available modes that don't include
+    /// `mode` (upstream `OperationNotAvailable` parity).
     @discardableResult
     public func setGroupDoseMode(_ mode: DoseMode, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
             try requireModel(Self.groupDoseModels, "group dose mode")
+            if let groupDoses = dashboard?.groupDoses,
+               !groupDoses.availableModes.isEmpty, !groupDoses.availableModes.contains(mode) {
+                let available = groupDoses.availableModes.map(\.rawValue)
+                throw LaMarzoccoError.operationNotAvailable(
+                    "dose mode \(mode.rawValue) is not available; available modes: \(available)")
+            }
             return try await client.setGroupDoseMode(serial: serialNumber, mode, groupIndex: groupIndex)
         }
         dashboard = dashboard?.settingGroupDoseMode(mode, groupIndex: groupIndex)
         return response
     }
 
+    /// Set a group dose value. Throws `LaMarzoccoError.operationNotAvailable`
+    /// when the cached widget has no configurable doses for `mode`, or `doseIndex`
+    /// isn't among them (upstream `OperationNotAvailable` parity).
     @discardableResult
     public func setGroupDose(mode: DoseMode, doseIndex: DoseIndex, dose: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
             try requireModel(Self.groupDoseModels, "group dose")
+            if let groupDoses = dashboard?.groupDoses {
+                let doses = groupDoses.doses.settings(for: mode)
+                guard !doses.isEmpty else {
+                    throw LaMarzoccoError.operationNotAvailable(
+                        "dose mode \(mode.rawValue) has no configurable doses in the current state (active mode \(groupDoses.mode.rawValue))")
+                }
+                guard doses.contains(where: { $0.doseIndex == doseIndex }) else {
+                    let available = doses.map(\.doseIndex.rawValue)
+                    throw LaMarzoccoError.operationNotAvailable(
+                        "dose index \(doseIndex.rawValue) is not available for mode \(mode.rawValue); available: \(available)")
+                }
+            }
             return try await client.setGroupDose(serial: serialNumber, mode: mode, doseIndex: doseIndex,
                                                  dose: dose, groupIndex: groupIndex)
         }

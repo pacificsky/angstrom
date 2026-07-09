@@ -128,7 +128,6 @@ final class LaMarzoccoMachineTests: XCTestCase {
         XCTAssertEqual(machine.dashboard?.hotWaterDose?.enabled, false)
         try await machine.setHotWaterDose(dose: 9.9, doseIndex: .doseA)
         XCTAssertEqual(machine.dashboard?.hotWaterDose?.doses.first?.dose, 9.9)
-        try await machine.setGroupDose(mode: .manual, doseIndex: .doseA, dose: 20)
         try await machine.setGroupMode(.brewing)
         XCTAssertEqual(machine.dashboard?.machineGroupStatus?.mode, .brewing)
         // Steam temperature is now Strada X-supported (was GS3-only).
@@ -164,6 +163,47 @@ final class LaMarzoccoMachineTests: XCTestCase {
             XCTFail("expected operationNotAvailable")
         } catch LaMarzoccoError.operationNotAvailable {}
         XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineGroupDoseSettingGroupBrewingPressure"), 0)
+    }
+
+    /// Upstream validates group-dose calls against the cached widget before
+    /// dispatch (`OperationNotAvailable`): a mode outside `availableModes`, an
+    /// empty dose list for the mode, or an unknown dose index all throw without
+    /// hitting the network.
+    func testGroupDoseGuardsThrowOperationNotAvailable() async throws {
+        // stradax fixture: availableModes == [ManualType], ManualType list empty.
+        let backend = try backend(dashboardFixture: "dashboard_stradax")
+        let machine = LaMarzoccoMachine(serialNumber: "SR123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+
+        do {
+            _ = try await machine.setGroupDoseMode(.mass) // not in availableModes
+            XCTFail("expected operationNotAvailable")
+        } catch LaMarzoccoError.operationNotAvailable {}
+        XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineGroupDoseChangeMode"), 0)
+
+        do {
+            _ = try await machine.setGroupDose(mode: .manual, doseIndex: .doseA, dose: 20) // empty list
+            XCTFail("expected operationNotAvailable")
+        } catch LaMarzoccoError.operationNotAvailable {}
+        XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineGroupDoseSettingDose"), 0)
+    }
+
+    func testGroupDoseValidCallsPassGuardsAndUpdateOptimistically() async throws {
+        // strada fixture: availableModes [Mass, Pulses, BrewRatio]; MassType has DoseA–D.
+        let backend = try backend(dashboardFixture: "dashboard_strada")
+        let machine = LaMarzoccoMachine(serialNumber: "SR123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+
+        do {
+            _ = try await machine.setGroupDose(mode: .mass, doseIndex: .continuous, dose: 20) // unknown index
+            XCTFail("expected operationNotAvailable")
+        } catch LaMarzoccoError.operationNotAvailable {}
+
+        try await machine.setGroupDose(mode: .mass, doseIndex: .doseA, dose: 20)
+        XCTAssertEqual(machine.dashboard?.groupDoses?.doses.massType.first?.dose, 20)
+
+        try await machine.setGroupDoseMode(.brewRatio)
+        XCTAssertEqual(machine.dashboard?.groupDoses?.mode, .brewRatio)
     }
 
     func testSwanGrinderCommands() async throws {
