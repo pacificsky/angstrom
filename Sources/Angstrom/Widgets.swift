@@ -40,6 +40,9 @@ public struct Dashboard: Sendable, Hashable, Codable {
     }
 
     public var machineStatus: MachineStatus? { first { if case .machineStatus(let v) = $0 { return v }; return nil } }
+    /// Per-group machine status (`CMMachineGroupStatus`). The Strada X reports
+    /// this *instead of* ``machineStatus``; the payload shape is identical.
+    public var machineGroupStatus: MachineStatus? { first { if case .machineGroupStatus(let v) = $0 { return v }; return nil } }
     public var coffeeBoiler: CoffeeBoiler? { first { if case .coffeeBoiler(let v) = $0 { return v }; return nil } }
     public var steamBoilerLevel: SteamBoilerLevel? { first { if case .steamBoilerLevel(let v) = $0 { return v }; return nil } }
     public var steamBoilerTemperature: SteamBoilerTemperature? { first { if case .steamBoilerTemperature(let v) = $0 { return v }; return nil } }
@@ -50,12 +53,17 @@ public struct Dashboard: Sendable, Hashable, Codable {
     public var hotWaterDose: HotWaterDose? { first { if case .hotWaterDose(let v) = $0 { return v }; return nil } }
     public var brewByWeightDoses: BrewByWeightDoses? { first { if case .brewByWeightDoses(let v) = $0 { return v }; return nil } }
     public var rinseFlush: RinseFlush? { first { if case .rinseFlush(let v) = $0 { return v }; return nil } }
+    public var autoFlush: AutoFlush? { first { if case .autoFlush(let v) = $0 { return v }; return nil } }
+    public var steamFlush: SteamFlush? { first { if case .steamFlush(let v) = $0 { return v }; return nil } }
     public var noWater: NoWater? { first { if case .noWater(let v) = $0 { return v }; return nil } }
     public var scale: Scale? { first { if case .scale(let v) = $0 { return v }; return nil } }
     public var grinderStatus: GrinderMachineStatus? { first { if case .grinderStatus(let v) = $0 { return v }; return nil } }
     public var grinderDoses: GrinderDoses? { first { if case .grinderDoses(let v) = $0 { return v }; return nil } }
     public var grinderSingleDose: GrinderSingleDose? { first { if case .grinderSingleDose(let v) = $0 { return v }; return nil } }
     public var grinderBaristaLight: GrinderBaristaLight? { first { if case .grinderBaristaLight(let v) = $0 { return v }; return nil } }
+    public var grinderSpeed: GrinderSpeed? { first { if case .grinderSpeed(let v) = $0 { return v }; return nil } }
+    public var grinderMoreDose: GrinderMoreDose? { first { if case .grinderMoreDose(let v) = $0 { return v }; return nil } }
+    public var grinderGrindWith: GrinderGrindWith? { first { if case .grinderGrindWith(let v) = $0 { return v }; return nil } }
 
     /// Codes of widgets this version did not recognize or could not decode.
     public var unknownWidgetCodes: [String] {
@@ -107,6 +115,7 @@ public struct Widget: Sendable, Hashable, Codable {
         try c.encode(index, forKey: .index)
         switch kind {
         case .machineStatus(let v): try c.encode(v, forKey: .output)
+        case .machineGroupStatus(let v): try c.encode(v, forKey: .output)
         case .coffeeBoiler(let v): try c.encode(v, forKey: .output)
         case .steamBoilerLevel(let v): try c.encode(v, forKey: .output)
         case .steamBoilerTemperature(let v): try c.encode(v, forKey: .output)
@@ -117,12 +126,17 @@ public struct Widget: Sendable, Hashable, Codable {
         case .hotWaterDose(let v): try c.encode(v, forKey: .output)
         case .brewByWeightDoses(let v): try c.encode(v, forKey: .output)
         case .rinseFlush(let v): try c.encode(v, forKey: .output)
+        case .autoFlush(let v): try c.encode(v, forKey: .output)
+        case .steamFlush(let v): try c.encode(v, forKey: .output)
         case .noWater(let v): try c.encode(v, forKey: .output)
         case .scale(let v): try c.encode(v, forKey: .output)
         case .grinderStatus(let v): try c.encode(v, forKey: .output)
         case .grinderDoses(let v): try c.encode(v, forKey: .output)
         case .grinderSingleDose(let v): try c.encode(v, forKey: .output)
         case .grinderBaristaLight(let v): try c.encode(v, forKey: .output)
+        case .grinderSpeed(let v): try c.encode(v, forKey: .output)
+        case .grinderMoreDose(let v): try c.encode(v, forKey: .output)
+        case .grinderGrindWith(let v): try c.encode(v, forKey: .output)
         case .unknown: break
         }
     }
@@ -131,6 +145,7 @@ public struct Widget: Sendable, Hashable, Codable {
         func output<T: Decodable>(_ type: T.Type) -> T? { try? c.decode(T.self, forKey: .output) }
         switch code {
         case "CMMachineStatus": if let v = output(MachineStatus.self) { return .machineStatus(v) }
+        case "CMMachineGroupStatus": if let v = output(MachineStatus.self) { return .machineGroupStatus(v) }
         case "CMCoffeeBoiler": if let v = output(CoffeeBoiler.self) { return .coffeeBoiler(v) }
         case "CMSteamBoilerLevel": if let v = output(SteamBoilerLevel.self) { return .steamBoilerLevel(v) }
         case "CMSteamBoilerTemperature": if let v = output(SteamBoilerTemperature.self) { return .steamBoilerTemperature(v) }
@@ -141,12 +156,17 @@ public struct Widget: Sendable, Hashable, Codable {
         case "CMHotWaterDose": if let v = output(HotWaterDose.self) { return .hotWaterDose(v) }
         case "CMBrewByWeightDoses": if let v = output(BrewByWeightDoses.self) { return .brewByWeightDoses(v) }
         case "CMRinseFlush": if let v = output(RinseFlush.self) { return .rinseFlush(v) }
+        case "CMAutoFlush": if let v = output(AutoFlush.self) { return .autoFlush(v) }
+        case "CMSteamFlush": if let v = output(SteamFlush.self) { return .steamFlush(v) }
         case "CMNoWater": if let v = output(NoWater.self) { return .noWater(v) }
         case "ThingScale": if let v = output(Scale.self) { return .scale(v) }
         case "GMachineStatus": if let v = output(GrinderMachineStatus.self) { return .grinderStatus(v) }
         case "GDoses": if let v = output(GrinderDoses.self) { return .grinderDoses(v) }
         case "GSingleDoseMode": if let v = output(GrinderSingleDose.self) { return .grinderSingleDose(v) }
         case "GBaristaLight": if let v = output(GrinderBaristaLight.self) { return .grinderBaristaLight(v) }
+        case "GSpeed": if let v = output(GrinderSpeed.self) { return .grinderSpeed(v) }
+        case "GMoreDose": if let v = output(GrinderMoreDose.self) { return .grinderMoreDose(v) }
+        case "GGrindWith": if let v = output(GrinderGrindWith.self) { return .grinderGrindWith(v) }
         default: break
         }
         return .unknown(code: code)
@@ -156,6 +176,9 @@ public struct Widget: Sendable, Hashable, Codable {
 /// The decoded payload of a ``Widget``.
 public enum WidgetKind: Sendable, Hashable {
     case machineStatus(MachineStatus)
+    /// `CMMachineGroupStatus` — same payload shape as ``machineStatus``, reported
+    /// per group (the Strada X sends this instead of `CMMachineStatus`).
+    case machineGroupStatus(MachineStatus)
     case coffeeBoiler(CoffeeBoiler)
     case steamBoilerLevel(SteamBoilerLevel)
     case steamBoilerTemperature(SteamBoilerTemperature)
@@ -166,12 +189,17 @@ public enum WidgetKind: Sendable, Hashable {
     case hotWaterDose(HotWaterDose)
     case brewByWeightDoses(BrewByWeightDoses)
     case rinseFlush(RinseFlush)
+    case autoFlush(AutoFlush)
+    case steamFlush(SteamFlush)
     case noWater(NoWater)
     case scale(Scale)
     case grinderStatus(GrinderMachineStatus)
     case grinderDoses(GrinderDoses)
     case grinderSingleDose(GrinderSingleDose)
     case grinderBaristaLight(GrinderBaristaLight)
+    case grinderSpeed(GrinderSpeed)
+    case grinderMoreDose(GrinderMoreDose)
+    case grinderGrindWith(GrinderGrindWith)
     /// A widget code this version doesn't model, or whose payload failed to decode.
     case unknown(code: String)
 }
@@ -307,6 +335,18 @@ public struct RinseFlush: Sendable, Hashable, Codable {
     public let timeSecondsStep: Double
 }
 
+/// Automatic group flushing (`CMAutoFlush`, Strada X).
+public struct AutoFlush: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
+}
+
+/// Automatic steam-wand flushing (`CMSteamFlush`, Strada X).
+public struct SteamFlush: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
+}
+
 // MARK: - Doses
 
 public struct GroupDoses: Sendable, Hashable, Codable {
@@ -315,7 +355,8 @@ public struct GroupDoses: Sendable, Hashable, Codable {
     /// matching pylamarzocco's `GroupDosesSettings.mode` default of `PulsesType`.
     public let mode: DoseMode
     public let doses: DosePulses
-    public let profile: String?
+    /// The selected brewing profile, in ``DoseMode/profile`` mode (Strada X).
+    public let profile: ProfileSettings?
     /// Whether this group can mirror group 1's settings, and its current target.
     public let mirrorWithGroup1Supported: Bool
     public let mirrorWithGroup1: String?
@@ -325,7 +366,7 @@ public struct GroupDoses: Sendable, Hashable, Codable {
     public let continuousDose: String?
     /// Brewing-pressure capability/value.
     public let brewingPressureSupported: Bool
-    public let brewingPressure: String?
+    public let brewingPressure: BrewingPressureSettings?
 
     private enum CodingKeys: String, CodingKey {
         case availableModes, mode, doses, profile
@@ -337,14 +378,14 @@ public struct GroupDoses: Sendable, Hashable, Codable {
         availableModes: [DoseMode] = [],
         mode: DoseMode = .pulses,
         doses: DosePulses,
-        profile: String? = nil,
+        profile: ProfileSettings? = nil,
         mirrorWithGroup1Supported: Bool = false,
         mirrorWithGroup1: String? = nil,
         mirrorWithGroup1NotEffective: Bool = false,
         continuousDoseSupported: Bool = false,
         continuousDose: String? = nil,
         brewingPressureSupported: Bool = false,
-        brewingPressure: String? = nil
+        brewingPressure: BrewingPressureSettings? = nil
     ) {
         self.availableModes = availableModes
         self.mode = mode
@@ -364,27 +405,109 @@ public struct GroupDoses: Sendable, Hashable, Codable {
         availableModes = (try? c.decode([DoseMode].self, forKey: .availableModes)) ?? []
         mode = (try? c.decode(DoseMode.self, forKey: .mode)) ?? .pulses
         doses = (try? c.decode(DosePulses.self, forKey: .doses)) ?? DosePulses()
-        profile = (try? c.decodeIfPresent(String.self, forKey: .profile)) ?? nil
+        profile = (try? c.decodeIfPresent(ProfileSettings.self, forKey: .profile)) ?? nil
         mirrorWithGroup1Supported = (try? c.decode(Bool.self, forKey: .mirrorWithGroup1Supported)) ?? false
         mirrorWithGroup1 = (try? c.decodeIfPresent(String.self, forKey: .mirrorWithGroup1)) ?? nil
         mirrorWithGroup1NotEffective = (try? c.decode(Bool.self, forKey: .mirrorWithGroup1NotEffective)) ?? false
         continuousDoseSupported = (try? c.decode(Bool.self, forKey: .continuousDoseSupported)) ?? false
         continuousDose = (try? c.decodeIfPresent(String.self, forKey: .continuousDose)) ?? nil
         brewingPressureSupported = (try? c.decode(Bool.self, forKey: .brewingPressureSupported)) ?? false
-        brewingPressure = (try? c.decodeIfPresent(String.self, forKey: .brewingPressure)) ?? nil
+        brewingPressure = (try? c.decodeIfPresent(BrewingPressureSettings.self, forKey: .brewingPressure)) ?? nil
     }
 }
 
+/// The per-mode dose lists of a group. Historically only `PulsesType`; the
+/// Strada X adds manual/mass/brew-ratio/profile lists.
 public struct DosePulses: Sendable, Hashable, Codable {
     public let pulsesType: [DoseSetting]
-    private enum CodingKeys: String, CodingKey { case pulsesType = "PulsesType" }
+    public let manualType: [DoseSetting]
+    public let massType: [DoseSetting]
+    public let brewRatioType: [DoseSetting]
+    public let profileType: [DoseSetting]
 
-    public init(pulsesType: [DoseSetting] = []) { self.pulsesType = pulsesType }
+    private enum CodingKeys: String, CodingKey {
+        case pulsesType = "PulsesType"
+        case manualType = "ManualType"
+        case massType = "MassType"
+        case brewRatioType = "BrewRatioType"
+        case profileType = "ProfileType"
+    }
+
+    public init(
+        pulsesType: [DoseSetting] = [],
+        manualType: [DoseSetting] = [],
+        massType: [DoseSetting] = [],
+        brewRatioType: [DoseSetting] = [],
+        profileType: [DoseSetting] = []
+    ) {
+        self.pulsesType = pulsesType
+        self.manualType = manualType
+        self.massType = massType
+        self.brewRatioType = brewRatioType
+        self.profileType = profileType
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         pulsesType = (try? c.decode([DoseSetting].self, forKey: .pulsesType)) ?? []
+        manualType = (try? c.decode([DoseSetting].self, forKey: .manualType)) ?? []
+        massType = (try? c.decode([DoseSetting].self, forKey: .massType)) ?? []
+        brewRatioType = (try? c.decode([DoseSetting].self, forKey: .brewRatioType)) ?? []
+        profileType = (try? c.decode([DoseSetting].self, forKey: .profileType)) ?? []
     }
+}
+
+/// The selected brewing profile of a group (`CMGroupDoses.profile`, Strada X).
+public struct ProfileSettings: Sendable, Hashable, Codable {
+    public let selectedProfile: Int
+    public let numberOfProfiles: Int
+    public let mass: Double
+    public let time: Double
+    public let graph: ProfileGraph?
+
+    private enum CodingKeys: String, CodingKey {
+        case selectedProfile, numberOfProfiles, mass, time, graph
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        selectedProfile = try c.decode(Int.self, forKey: .selectedProfile)
+        numberOfProfiles = try c.decode(Int.self, forKey: .numberOfProfiles)
+        mass = try c.decode(Double.self, forKey: .mass)
+        time = try c.decode(Double.self, forKey: .time)
+        graph = (try? c.decodeIfPresent(ProfileGraph.self, forKey: .graph)) ?? nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(selectedProfile, forKey: .selectedProfile)
+        try c.encode(numberOfProfiles, forKey: .numberOfProfiles)
+        try c.encode(mass, forKey: .mass)
+        try c.encode(time, forKey: .time)
+        try c.encodeIfPresent(graph, forKey: .graph)
+    }
+}
+
+/// Pressure/flow profile graph data points.
+public struct ProfileGraph: Sendable, Hashable, Codable {
+    public let x: [Double]
+    public let y: [Double]
+
+    private enum CodingKeys: String, CodingKey { case x, y }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        x = (try? c.decode([Double].self, forKey: .x)) ?? []
+        y = (try? c.decode([Double].self, forKey: .y)) ?? []
+    }
+}
+
+/// Brewing-pressure configuration (`CMGroupDoses.brewingPressure`, Strada X).
+public struct BrewingPressureSettings: Sendable, Hashable, Codable {
+    public let pressure: Double
+    public let pressureMin: Double
+    public let pressureMax: Double
+    public let pressureStep: Double
 }
 
 public struct DoseSetting: Sendable, Hashable, Codable {
@@ -400,6 +523,12 @@ public struct HotWaterDose: Sendable, Hashable, Codable {
     public let enabledSupported: Bool
     public let doses: [DoseSetting]
     private enum CodingKeys: String, CodingKey { case enabled, enabledSupported, doses }
+
+    public init(enabled: Bool, enabledSupported: Bool, doses: [DoseSetting]) {
+        self.enabled = enabled
+        self.enabledSupported = enabledSupported
+        self.doses = doses
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -490,10 +619,20 @@ public struct GrinderDoses: Sendable, Hashable, Codable {
     public let mode: GrinderDoseMode
     public let doses: GrinderDosesSettings
     public let speedLevelsSupported: Bool
-    public let speedLevels: String?
+    /// Per-dose speed levels (Swan).
+    public let speedLevels: [GrinderSpeedLevelSetting]?
 
     private enum CodingKeys: String, CodingKey {
         case scaleConnected, mode, doses, speedLevelsSupported, speedLevels
+    }
+
+    public init(scaleConnected: Bool, mode: GrinderDoseMode, doses: GrinderDosesSettings,
+                speedLevelsSupported: Bool = false, speedLevels: [GrinderSpeedLevelSetting]? = nil) {
+        self.scaleConnected = scaleConnected
+        self.mode = mode
+        self.doses = doses
+        self.speedLevelsSupported = speedLevelsSupported
+        self.speedLevels = speedLevels
     }
 
     public init(from decoder: Decoder) throws {
@@ -502,8 +641,14 @@ public struct GrinderDoses: Sendable, Hashable, Codable {
         mode = try c.decode(GrinderDoseMode.self, forKey: .mode)
         doses = (try? c.decode(GrinderDosesSettings.self, forKey: .doses)) ?? GrinderDosesSettings()
         speedLevelsSupported = (try? c.decode(Bool.self, forKey: .speedLevelsSupported)) ?? false
-        speedLevels = (try? c.decodeIfPresent(String.self, forKey: .speedLevels)) ?? nil
+        speedLevels = (try? c.decodeIfPresent([GrinderSpeedLevelSetting].self, forKey: .speedLevels)) ?? nil
     }
+}
+
+/// A grinder dose's speed level (`GDoses.speedLevels` entries, Swan).
+public struct GrinderSpeedLevelSetting: Sendable, Hashable, Codable {
+    public let doseIndex: DoseIndex
+    public let level: GrinderSpeedLevel
 }
 
 public struct GrinderDosesSettings: Sendable, Hashable, Codable {
@@ -511,18 +656,24 @@ public struct GrinderDosesSettings: Sendable, Hashable, Codable {
     public let timeType: [GrinderDoseSetting]
     /// Doses configured in mass mode (grams).
     public let massType: [GrinderDoseSetting]
+    /// Doses configured in revolution mode (Swan).
+    public let revType: [GrinderDoseSetting]
 
-    private enum CodingKeys: String, CodingKey { case timeType = "TimeType", massType = "MassType" }
+    private enum CodingKeys: String, CodingKey {
+        case timeType = "TimeType", massType = "MassType", revType = "RevType"
+    }
 
-    public init(timeType: [GrinderDoseSetting] = [], massType: [GrinderDoseSetting] = []) {
+    public init(timeType: [GrinderDoseSetting] = [], massType: [GrinderDoseSetting] = [], revType: [GrinderDoseSetting] = []) {
         self.timeType = timeType
         self.massType = massType
+        self.revType = revType
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         timeType = (try? c.decode([GrinderDoseSetting].self, forKey: .timeType)) ?? []
         massType = (try? c.decode([GrinderDoseSetting].self, forKey: .massType)) ?? []
+        revType = (try? c.decode([GrinderDoseSetting].self, forKey: .revType)) ?? []
     }
 }
 
@@ -537,6 +688,17 @@ public struct GrinderDoseSetting: Sendable, Hashable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case doseIndex, dose, doseMin, doseMax, doseStep, speedAutoSupported, speedAuto
+    }
+
+    public init(doseIndex: DoseIndex, dose: Double, doseMin: Double = 0, doseMax: Double = 0,
+                doseStep: Double = 0, speedAutoSupported: Bool = false, speedAuto: String? = nil) {
+        self.doseIndex = doseIndex
+        self.dose = dose
+        self.doseMin = doseMin
+        self.doseMax = doseMax
+        self.doseStep = doseStep
+        self.speedAutoSupported = speedAutoSupported
+        self.speedAuto = speedAuto
     }
 
     public init(from decoder: Decoder) throws {
@@ -559,4 +721,69 @@ public struct GrinderSingleDose: Sendable, Hashable, Codable {
 public struct GrinderBaristaLight: Sendable, Hashable, Codable {
     public let enabled: Bool
     public init(enabled: Bool) { self.enabled = enabled }
+}
+
+/// Grinder motor speed per dose (`GSpeed`, Swan). ``doses`` is keyed by the
+/// dose-index string (`"DoseA"`, …), as on the wire.
+public struct GrinderSpeed: Sendable, Hashable, Codable {
+    public let doses: [String: GrinderSpeedDose]
+    public let groupsNumber: Int
+    public let speedAutoSupported: Bool
+    public let speedAuto: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case doses, groupsNumber, speedAutoSupported, speedAuto
+    }
+
+    public init(doses: [String: GrinderSpeedDose], groupsNumber: Int = 1,
+                speedAutoSupported: Bool = false, speedAuto: String? = nil) {
+        self.doses = doses
+        self.groupsNumber = groupsNumber
+        self.speedAutoSupported = speedAutoSupported
+        self.speedAuto = speedAuto
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        doses = (try? c.decode([String: GrinderSpeedDose].self, forKey: .doses)) ?? [:]
+        groupsNumber = (try? c.decode(Int.self, forKey: .groupsNumber)) ?? 1
+        speedAutoSupported = (try? c.decode(Bool.self, forKey: .speedAutoSupported)) ?? false
+        speedAuto = (try? c.decodeIfPresent(String.self, forKey: .speedAuto)) ?? nil
+    }
+}
+
+/// One dose's speed configuration inside ``GrinderSpeed``.
+public struct GrinderSpeedDose: Sendable, Hashable, Codable {
+    public let level: GrinderSpeedLevel
+    public let autoEnabled: Bool
+    public let groupIndex: Int?
+
+    private enum CodingKeys: String, CodingKey { case level, autoEnabled, groupIndex }
+
+    public init(level: GrinderSpeedLevel, autoEnabled: Bool = false, groupIndex: Int? = nil) {
+        self.level = level
+        self.autoEnabled = autoEnabled
+        self.groupIndex = groupIndex
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        level = try c.decode(GrinderSpeedLevel.self, forKey: .level)
+        autoEnabled = (try? c.decode(Bool.self, forKey: .autoEnabled)) ?? false
+        groupIndex = (try? c.decodeIfPresent(Int.self, forKey: .groupIndex)) ?? nil
+    }
+}
+
+/// Additional "more dose" revolutions (`GMoreDose`, Swan).
+public struct GrinderMoreDose: Sendable, Hashable, Codable {
+    public let revolutions: Double
+    public let revolutionsMin: Double
+    public let revolutionsMax: Double
+    public let revolutionsStep: Double
+}
+
+/// How the grinder is triggered (`GGrindWith`, Swan).
+public struct GrinderGrindWith: Sendable, Hashable, Codable {
+    public let mode: GrinderGrindWithMode
+    public init(mode: GrinderGrindWithMode) { self.mode = mode }
 }

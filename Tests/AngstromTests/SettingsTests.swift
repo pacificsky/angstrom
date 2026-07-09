@@ -31,6 +31,49 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(first.days, [.tuesday])
     }
 
+    /// The Strada X scheduling payload (upstream v2.4.2): `autoOnOff` arrives
+    /// as an *object* (a mode string on other machines), `ecoMode` is present,
+    /// and `smartWakeUpSleep` is `null` — coerced to the empty default.
+    func testStradaScheduleDecodes() throws {
+        let schedule = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: try Fixture.data("schedule_strada"))
+        XCTAssertEqual(schedule.machine.model, .stradaX)
+        XCTAssertNil(schedule.autoOnOff, "the object form doesn't populate the mode string")
+        XCTAssertTrue(schedule.autoOnOffSupported)
+        let autoOnOff = try XCTUnwrap(schedule.autoOnOffSettings)
+        XCTAssertTrue(autoOnOff.enabled)
+        XCTAssertEqual(autoOnOff.onTimeMinutes, 360)
+        XCTAssertEqual(autoOnOff.offTimeMinutes, 1080)
+        XCTAssertNotNil(autoOnOff.ecoMode)
+        XCTAssertTrue(schedule.ecoModeSupported)
+        let eco = try XCTUnwrap(schedule.ecoMode)
+        XCTAssertEqual(eco.offset, 10)
+        XCTAssertEqual(eco.timeoutMinutes, 120)
+        XCTAssertEqual(schedule.wakeUpSchedules, [], "null smartWakeUpSleep coerces to the empty default")
+    }
+
+    /// On machines that send the mode string, ``MachineSchedule/autoOnOff``
+    /// keeps working and the object form stays nil.
+    func testAutoOnOffStringFormStillDecodes() throws {
+        let schedule = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: try Fixture.data("schedule"))
+        XCTAssertEqual(schedule.autoOnOff, "00:30")
+        XCTAssertNil(schedule.autoOnOffSettings)
+    }
+
+    func testStradaSettingsDecode() throws {
+        let settings = try JSONDecoder.laMarzocco().decode(
+            MachineSettings.self, from: try Fixture.data("settings_strada"))
+        XCTAssertEqual(settings.machine.model, .stradaX)
+        XCTAssertEqual(settings.firmware.count, 3)
+        XCTAssertEqual(settings.machineFirmware?.buildVersion, "v2.2.0")
+        // The Strada X reports a third firmware component, type "File", whose
+        // changeLog is null — both new in upstream v2.4.2.
+        let file = try XCTUnwrap(settings.firmware.first { $0.type == .file })
+        XCTAssertEqual(file.buildVersion, "v17")
+        XCTAssertNil(file.changeLog)
+    }
+
     func testSettingsResilienceDefaults() throws {
         // A near-empty payload must decode with safe defaults, not throw.
         let settings = try JSONDecoder.laMarzocco().decode(

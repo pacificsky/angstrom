@@ -99,6 +99,22 @@ private struct BoilerLevelBody: Encodable, Sendable { let boilerIndex: Int; let 
 private struct BoilerTemperatureBody: Encodable, Sendable { let boilerIndex: Int; let targetTemperature: Double }
 private struct SmartStandbyBody: Encodable, Sendable { let enabled: Bool; let minutes: Int; let after: String }
 private struct GrinderLightBody: Encodable, Sendable { let index: Int; let enabled: Bool }
+private struct GroupModeBody: Encodable, Sendable { let groupIndex: Int; let mode: String }
+private struct RinseFlushTimeBody: Encodable, Sendable { let timeSeconds: Double }
+private struct HotWaterDoseBody: Encodable, Sendable { let doseIndex: String; let dose: Double }
+private struct GroupDoseBody: Encodable, Sendable { let groupIndex: Int; let mode: String; let doseIndex: String; let dose: Double }
+private struct BrewingPressureBody: Encodable, Sendable { let groupIndex: Int; let pressure: Double }
+private struct ContinuousDoseEnabledBody: Encodable, Sendable { let groupIndex: Int; let rinseEnabled: Bool }
+private struct ContinuousDoseBody: Encodable, Sendable { let groupIndex: Int; let rinseSeconds: Double }
+private struct MirrorGroupBody: Encodable, Sendable { let groupIndex: Int; let enabled: Bool }
+private struct IndexedModeBody: Encodable, Sendable { let index: Int; let mode: String }
+private struct GrinderDoseBody: Encodable, Sendable {
+    let index: Int; let mode: String; let doseIndex: String; let dose: Double
+    /// Omitted from the JSON when nil, matching pylamarzocco (the key is only
+    /// added when a speed level is supplied).
+    let speedLevel: String?
+}
+private struct GrinderMoreDoseBody: Encodable, Sendable { let index: Int; let revolutions: Double }
 
 private struct PreExtractionTimesBody: Encodable, Sendable {
     struct Seconds: Encodable, Sendable {
@@ -128,11 +144,18 @@ private func round1(_ value: Double) -> Double { (value * 10).rounded(.toNearest
 
 extension LaMarzoccoCloudClient {
 
+    /// Set the machine's operating mode directly (the Strada X also accepts
+    /// `EcoMode`). Most callers want ``setPower(serial:on:)``.
+    @discardableResult
+    public func setMode(serial: String, _ mode: MachineMode) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineChangeMode",
+                                 body: ModeBody(mode: mode.rawValue))
+    }
+
     /// Turn the machine on (`BrewingMode`) or off (`StandBy`).
     @discardableResult
     public func setPower(serial: String, on: Bool) async throws -> CommandResponse {
-        try await executeCommand(serial: serial, "CoffeeMachineChangeMode",
-                                 body: ModeBody(mode: on ? "BrewingMode" : "StandBy"))
+        try await setMode(serial: serial, on ? .brewing : .standby)
     }
 
     /// Turn the steam boiler on or off.
@@ -236,11 +259,164 @@ extension LaMarzoccoCloudClient {
         return try await executeCommand(serial: serial, "CoffeeMachineBrewByWeightSettingDoses", body: body)
     }
 
+    // MARK: Strada X
+
+    /// Enable or disable automatic group flushing (Strada X).
+    @discardableResult
+    public func setAutoFlush(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingAutoFlushEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Enable or disable automatic steam-wand flushing (Strada X).
+    @discardableResult
+    public func setSteamFlush(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingSteamFlushEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Enable or disable automatic rinse flushing (Strada X).
+    @discardableResult
+    public func setRinseFlush(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingRinseFlushEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Set the duration of the automatic rinse flush (Strada X).
+    @discardableResult
+    public func setRinseFlushTime(serial: String, seconds: Double) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingRinseFlushTime",
+                                 body: RinseFlushTimeBody(timeSeconds: round1(seconds)))
+    }
+
+    /// Enable or disable the hot water dose (Strada X).
+    @discardableResult
+    public func setHotWaterDoseEnabled(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingHotWaterDoseEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Set a hot water dose value (Strada X / GS3 AV).
+    @discardableResult
+    public func setHotWaterDose(serial: String, dose: Double, doseIndex: DoseIndex) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingHotWaterDose",
+                                 body: HotWaterDoseBody(doseIndex: doseIndex.rawValue, dose: round1(dose)))
+    }
+
+    /// Enable or disable the cup warmer.
+    @discardableResult
+    public func setCupWarmer(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingCupWarmerEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Enable or disable plumb-in mode.
+    @discardableResult
+    public func setPlumbIn(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingPlumbIn",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Set the operating mode of a single group (Strada X).
+    @discardableResult
+    public func setGroupMode(serial: String, _ mode: MachineMode, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupChangeMode",
+                                 body: GroupModeBody(groupIndex: groupIndex, mode: mode.rawValue))
+    }
+
+    /// Enable or disable the coffee boiler (Strada X).
+    @discardableResult
+    public func setCoffeeBoilerEnabled(serial: String, on: Bool, boilerIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineSettingCoffeeBoilerEnabled",
+                                 body: BoilerEnabledBody(boilerIndex: boilerIndex, enabled: on))
+    }
+
+    /// Set the dose mode of a group (Strada X / GS3 AV).
+    @discardableResult
+    public func setGroupDoseMode(serial: String, _ mode: DoseMode, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseChangeMode",
+                                 body: GroupModeBody(groupIndex: groupIndex, mode: mode.rawValue))
+    }
+
+    /// Set a group dose value for a given mode and dose index (Strada X / GS3 AV).
+    @discardableResult
+    public func setGroupDose(
+        serial: String, mode: DoseMode, doseIndex: DoseIndex, dose: Double, groupIndex: Int = 1
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseSettingDose",
+                                 body: GroupDoseBody(groupIndex: groupIndex, mode: mode.rawValue,
+                                                     doseIndex: doseIndex.rawValue, dose: round1(dose)))
+    }
+
+    /// Set the brewing pressure of a group (Strada X).
+    @discardableResult
+    public func setBrewingPressure(serial: String, pressure: Double, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseSettingGroupBrewingPressure",
+                                 body: BrewingPressureBody(groupIndex: groupIndex, pressure: round1(pressure)))
+    }
+
+    /// Enable or disable the continuous (rinse) dose of a group (Strada X / GS3 AV).
+    @discardableResult
+    public func setContinuousDoseEnabled(serial: String, on: Bool, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseSettingContinuousDoseEnabled",
+                                 body: ContinuousDoseEnabledBody(groupIndex: groupIndex, rinseEnabled: on))
+    }
+
+    /// Set the continuous (rinse) dose duration of a group (Strada X / GS3 AV).
+    @discardableResult
+    public func setContinuousDose(serial: String, seconds: Double, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseSettingContinuousDose",
+                                 body: ContinuousDoseBody(groupIndex: groupIndex, rinseSeconds: round1(seconds)))
+    }
+
+    /// Make a group mirror group 1's doses (Strada X). `groupIndex` defaults to
+    /// 2, since group 1 cannot mirror itself.
+    @discardableResult
+    public func setMirrorGroup1(serial: String, on: Bool, groupIndex: Int = 2) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "CoffeeMachineGroupDoseSettingMirrorGroup1",
+                                 body: MirrorGroupBody(groupIndex: groupIndex, enabled: on))
+    }
+
+    // MARK: Grinder
+
+    /// Set the grinder mode: `GrindingMode` wakes it, `StandBy` puts it to sleep.
+    @discardableResult
+    public func setGrinderMode(serial: String, _ mode: GrinderMode) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderChangeMode",
+                                 body: ModeBody(mode: mode.rawValue))
+    }
+
     /// Enable or disable a grinder's barista light (ignored while in standby).
     @discardableResult
-    public func setGrinderBaristaLight(serial: String, on: Bool) async throws -> CommandResponse {
+    public func setGrinderBaristaLight(serial: String, on: Bool, index: Int = 1) async throws -> CommandResponse {
         try await executeCommand(serial: serial, "GrinderSettingBaristaLightEnabled",
-                                 body: GrinderLightBody(index: 1, enabled: on))
+                                 body: GrinderLightBody(index: index, enabled: on))
+    }
+
+    /// Set the grind-with mode (Swan).
+    @discardableResult
+    public func setGrinderGrindWith(serial: String, _ mode: GrinderGrindWithMode) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingGrindWithMode",
+                                 body: IndexedModeBody(index: 1, mode: mode.rawValue))
+    }
+
+    /// Set the dose, and optionally the speed level, of a grinder dose.
+    @discardableResult
+    public func setGrinderDose(
+        serial: String, doseIndex: DoseIndex, dose: Double,
+        mode: GrinderDoseMode, speedLevel: GrinderSpeedLevel? = nil
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingDose",
+                                 body: GrinderDoseBody(index: 1, mode: mode.rawValue,
+                                                       doseIndex: doseIndex.rawValue, dose: dose,
+                                                       speedLevel: speedLevel?.rawValue))
+    }
+
+    /// Set the additional "more dose" revolutions of a grinder (Swan).
+    @discardableResult
+    public func setGrinderMoreDose(serial: String, revolutions: Double) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingMoreDose",
+                                 body: GrinderMoreDoseBody(index: 1, revolutions: revolutions))
     }
 
     // MARK: Firmware

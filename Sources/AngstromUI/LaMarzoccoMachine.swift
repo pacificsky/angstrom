@@ -120,7 +120,8 @@ public final class LaMarzoccoMachine {
     /// before it dropped off the cloud, so this value is stale — gate on
     /// ``isMachineConnected`` before presenting it as live status.
     public var powerState: PowerState {
-        if let mode = dashboard?.machineStatus?.mode {
+        // The Strada X reports CMMachineGroupStatus instead of CMMachineStatus.
+        if let mode = dashboard?.machineStatus?.mode ?? dashboard?.machineGroupStatus?.mode {
             switch mode {
             case .brewing: return .on
             case .standby: return .off
@@ -130,7 +131,7 @@ public final class LaMarzoccoMachine {
         }
         if let mode = dashboard?.grinderStatus?.mode {
             switch mode {
-            case .grinding: return .on
+            case .grinding, .poweredOn: return .on
             case .standby: return .off
             case .other(let v): return .other(v)
             }
@@ -354,6 +355,229 @@ public final class LaMarzoccoMachine {
         try await capturing { try await client.startBackflush(serial: serialNumber) }
     }
 
+    // MARK: Strada X commands (upstream v2.4.2)
+
+    /// Set the operating mode directly (the Strada X accepts `EcoMode` too).
+    @discardableResult
+    public func setMode(_ mode: MachineMode) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "machine mode")
+            return try await client.setMode(serial: serialNumber, mode)
+        }
+        dashboard = dashboard?.settingMachineMode(mode)
+        return response
+    }
+
+    @discardableResult
+    public func setAutoFlush(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "auto flush")
+            return try await client.setAutoFlush(serial: serialNumber, on: on)
+        }
+        dashboard = dashboard?.settingAutoFlush(on)
+        return response
+    }
+
+    @discardableResult
+    public func setSteamFlush(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "steam flush")
+            return try await client.setSteamFlush(serial: serialNumber, on: on)
+        }
+        dashboard = dashboard?.settingSteamFlush(on)
+        return response
+    }
+
+    @discardableResult
+    public func setRinseFlush(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "rinse flush")
+            return try await client.setRinseFlush(serial: serialNumber, on: on)
+        }
+        dashboard = dashboard?.settingRinseFlushEnabled(on)
+        return response
+    }
+
+    @discardableResult
+    public func setRinseFlushTime(seconds: Double) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "rinse flush time")
+            return try await client.setRinseFlushTime(serial: serialNumber, seconds: seconds)
+        }
+        dashboard = dashboard?.settingRinseFlushTime(seconds)
+        return response
+    }
+
+    @discardableResult
+    public func setHotWaterDoseEnabled(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "hot water dose enable")
+            return try await client.setHotWaterDoseEnabled(serial: serialNumber, on: on)
+        }
+        dashboard = dashboard?.settingHotWaterDoseEnabled(on)
+        return response
+    }
+
+    @discardableResult
+    public func setHotWaterDose(dose: Double, doseIndex: DoseIndex) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.groupDoseModels, "hot water dose")
+            return try await client.setHotWaterDose(serial: serialNumber, dose: dose, doseIndex: doseIndex)
+        }
+        dashboard = dashboard?.settingHotWaterDose(dose, doseIndex: doseIndex)
+        return response
+    }
+
+    /// Enable or disable the cup warmer (ungated, matching pylamarzocco).
+    @discardableResult
+    public func setCupWarmer(on: Bool) async throws -> CommandResponse {
+        try await capturing { try await client.setCupWarmer(serial: serialNumber, on: on) }
+    }
+
+    /// Enable or disable plumb-in mode (ungated, matching pylamarzocco).
+    @discardableResult
+    public func setPlumbIn(on: Bool) async throws -> CommandResponse {
+        try await capturing { try await client.setPlumbIn(serial: serialNumber, on: on) }
+    }
+
+    @discardableResult
+    public func setGroupMode(_ mode: MachineMode, groupIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "group mode")
+            return try await client.setGroupMode(serial: serialNumber, mode, groupIndex: groupIndex)
+        }
+        dashboard = dashboard?.settingGroupMode(mode, groupIndex: groupIndex)
+        return response
+    }
+
+    @discardableResult
+    public func setCoffeeBoilerEnabled(on: Bool, boilerIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "coffee boiler enable")
+            return try await client.setCoffeeBoilerEnabled(serial: serialNumber, on: on, boilerIndex: boilerIndex)
+        }
+        dashboard = dashboard?.settingCoffeeBoilerEnabled(on)
+        return response
+    }
+
+    @discardableResult
+    public func setGroupDoseMode(_ mode: DoseMode, groupIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.groupDoseModels, "group dose mode")
+            return try await client.setGroupDoseMode(serial: serialNumber, mode, groupIndex: groupIndex)
+        }
+        dashboard = dashboard?.settingGroupDoseMode(mode, groupIndex: groupIndex)
+        return response
+    }
+
+    @discardableResult
+    public func setGroupDose(mode: DoseMode, doseIndex: DoseIndex, dose: Double, groupIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.groupDoseModels, "group dose")
+            return try await client.setGroupDose(serial: serialNumber, mode: mode, doseIndex: doseIndex,
+                                                 dose: dose, groupIndex: groupIndex)
+        }
+        dashboard = dashboard?.settingGroupDose(mode: mode, doseIndex: doseIndex, dose: dose, groupIndex: groupIndex)
+        return response
+    }
+
+    /// Set the brewing pressure of a group. Throws
+    /// `LaMarzoccoError.operationNotAvailable` when the group's current dose
+    /// mode doesn't support it (upstream `OperationNotAvailable` parity).
+    @discardableResult
+    public func setBrewingPressure(pressure: Double, groupIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.stradaXModels, "brewing pressure")
+            if let groupDoses = dashboard?.groupDoses, !groupDoses.brewingPressureSupported {
+                throw LaMarzoccoError.operationNotAvailable(
+                    "brewing pressure is not supported in the current dose mode (\(groupDoses.mode.rawValue))")
+            }
+            return try await client.setBrewingPressure(serial: serialNumber, pressure: pressure, groupIndex: groupIndex)
+        }
+        dashboard = dashboard?.settingBrewingPressure(pressure, groupIndex: groupIndex)
+        return response
+    }
+
+    @discardableResult
+    public func setContinuousDoseEnabled(on: Bool, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await capturing {
+            try requireModel(Self.groupDoseModels, "continuous dose enable")
+            return try await client.setContinuousDoseEnabled(serial: serialNumber, on: on, groupIndex: groupIndex)
+        }
+    }
+
+    @discardableResult
+    public func setContinuousDose(seconds: Double, groupIndex: Int = 1) async throws -> CommandResponse {
+        try await capturing {
+            try requireModel(Self.groupDoseModels, "continuous dose")
+            return try await client.setContinuousDose(serial: serialNumber, seconds: seconds, groupIndex: groupIndex)
+        }
+    }
+
+    /// Make a group mirror group 1's doses. `groupIndex` must be 2 or 3
+    /// (group 1 cannot mirror itself).
+    @discardableResult
+    public func setMirrorGroup1(on: Bool, groupIndex: Int = 2) async throws -> CommandResponse {
+        try await capturing {
+            try requireModel(Self.stradaXModels, "mirror group 1")
+            guard (2...3).contains(groupIndex) else {
+                throw LaMarzoccoError.operationNotAvailable("groupIndex must be 2 or 3")
+            }
+            return try await client.setMirrorGroup1(serial: serialNumber, on: on, groupIndex: groupIndex)
+        }
+    }
+
+    // MARK: Grinder commands (upstream v2.4.2)
+
+    /// Wake the grinder (`GrindingMode`) or send it to standby.
+    @discardableResult
+    public func setGrinderPower(on: Bool) async throws -> CommandResponse {
+        let mode: GrinderMode = on ? .grinding : .standby
+        let response = try await capturing { try await client.setGrinderMode(serial: serialNumber, mode) }
+        dashboard = dashboard?.settingGrinderMode(mode)
+        return response
+    }
+
+    /// Set the grind-with mode (Swan).
+    @discardableResult
+    public func setGrinderGrindWith(_ mode: GrinderGrindWithMode) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.swanGrinderModels, "grind-with mode")
+            return try await client.setGrinderGrindWith(serial: serialNumber, mode)
+        }
+        dashboard = dashboard?.settingGrinderGrindWith(mode)
+        return response
+    }
+
+    /// Set a grinder dose (and optionally its speed level). When `mode` is nil
+    /// the dashboard's current dose mode is used (falling back to revolutions),
+    /// matching pylamarzocco's `LaMarzoccoGrinder.set_dose`.
+    @discardableResult
+    public func setGrinderDose(
+        doseIndex: DoseIndex, dose: Double,
+        mode: GrinderDoseMode? = nil, speedLevel: GrinderSpeedLevel? = nil
+    ) async throws -> CommandResponse {
+        let resolvedMode = mode ?? dashboard?.grinderDoses?.mode ?? .rev
+        let response = try await capturing {
+            try await client.setGrinderDose(serial: serialNumber, doseIndex: doseIndex, dose: dose,
+                                            mode: resolvedMode, speedLevel: speedLevel)
+        }
+        dashboard = dashboard?.settingGrinderDose(doseIndex: doseIndex, dose: dose,
+                                                  mode: resolvedMode, speedLevel: speedLevel)
+        return response
+    }
+
+    /// Set the additional "more dose" revolutions (Swan).
+    @discardableResult
+    public func setGrinderMoreDose(revolutions: Double) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.swanGrinderModels, "more dose")
+            return try await client.setGrinderMoreDose(serial: serialNumber, revolutions: revolutions)
+        }
+        dashboard = dashboard?.settingGrinderMoreDose(revolutions)
+        return response
+    }
+
     @discardableResult
     public func setPreExtractionMode(_ mode: PreExtractionMode) async throws -> CommandResponse {
         try await capturing { try await client.setPreExtractionMode(serial: serialNumber, mode) }
@@ -410,8 +634,12 @@ public final class LaMarzoccoMachine {
     // MARK: - Model gating
 
     static let steamLevelModels: Set<Model> = [.lineaMicra, .lineaMiniR]
-    static let steamTemperatureModels: Set<Model> = [.gs3, .gs3AV, .gs3MP]
+    static let steamTemperatureModels: Set<Model> = [.gs3, .gs3AV, .gs3MP, .stradaX]
     static let brewByWeightModels: Set<Model> = [.lineaMini, .lineaMiniR]
+    static let stradaXModels: Set<Model> = [.stradaX]
+    /// Group-dose commands the GS3 AV also accepts (upstream `@models_supported`).
+    static let groupDoseModels: Set<Model> = [.stradaX, .gs3AV]
+    static let swanGrinderModels: Set<Model> = [.swan]
 
     private func requireModel(_ supported: Set<Model>, _ what: String) throws {
         guard let model, supported.contains(model) else {

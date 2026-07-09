@@ -197,6 +197,9 @@ public enum LaMarzoccoError: Error, Sendable, Equatable {
     case commandFailed(status: String, errorCode: String?)
     /// The requested action isn't supported on this device model.
     case unsupportedModel(String)
+    /// The action exists on this model but isn't available in the machine's
+    /// current state (e.g. brewing pressure outside profile mode).
+    case operationNotAvailable(String)
 }
 
 extension LaMarzoccoError: LocalizedError {
@@ -222,6 +225,8 @@ extension LaMarzoccoError: LocalizedError {
             return "The machine rejected the command (\(status)\(errorCode.map { ", \($0)" } ?? ""))."
         case .unsupportedModel(let message):
             return "Unsupported for this machine: \(message)"
+        case .operationNotAvailable(let message):
+            return "Not available in the machine's current state: \(message)"
         }
     }
 }

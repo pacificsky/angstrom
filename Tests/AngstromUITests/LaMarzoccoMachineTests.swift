@@ -90,6 +90,118 @@ final class LaMarzoccoMachineTests: XCTestCase {
         """)
     }
 
+    // MARK: - Strada X / Swan (upstream v2.4.2)
+
+    /// The Strada X reports `CMMachineGroupStatus` instead of `CMMachineStatus`;
+    /// `powerState` must derive from it, and `setPower`'s optimistic update must
+    /// flip it.
+    func testStradaXPowerStateFromGroupStatus() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_stradax", serial: "SR123456")
+        try await machine.refreshDashboard()
+        XCTAssertEqual(machine.model, .stradaX)
+        XCTAssertNil(machine.dashboard?.machineStatus)
+        XCTAssertEqual(machine.powerState, .off) // group status mode: StandBy
+
+        try await machine.setPower(on: true)
+        XCTAssertEqual(machine.dashboard?.machineGroupStatus?.mode, .brewing)
+        XCTAssertEqual(machine.powerState, .on)
+    }
+
+    func testStradaXCommandsGateAndUpdateOptimistically() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_stradax", serial: "SR123456")
+        try await machine.refreshDashboard()
+
+        try await machine.setMode(.eco)
+        XCTAssertEqual(machine.dashboard?.machineGroupStatus?.mode, .eco)
+
+        try await machine.setAutoFlush(on: false)
+        XCTAssertEqual(machine.dashboard?.autoFlush?.enabled, false)
+        try await machine.setSteamFlush(on: false)
+        XCTAssertEqual(machine.dashboard?.steamFlush?.enabled, false)
+        try await machine.setRinseFlush(on: false)
+        XCTAssertEqual(machine.dashboard?.rinseFlush?.enabled, false)
+        try await machine.setRinseFlushTime(seconds: 2.5)
+        XCTAssertEqual(machine.dashboard?.rinseFlush?.timeSeconds, 2.5)
+        try await machine.setCoffeeBoilerEnabled(on: false)
+        XCTAssertEqual(machine.dashboard?.coffeeBoiler?.enabled, false)
+        try await machine.setHotWaterDoseEnabled(on: false)
+        XCTAssertEqual(machine.dashboard?.hotWaterDose?.enabled, false)
+        try await machine.setHotWaterDose(dose: 9.9, doseIndex: .doseA)
+        XCTAssertEqual(machine.dashboard?.hotWaterDose?.doses.first?.dose, 9.9)
+        try await machine.setGroupDose(mode: .manual, doseIndex: .doseA, dose: 20)
+        try await machine.setGroupMode(.brewing)
+        XCTAssertEqual(machine.dashboard?.machineGroupStatus?.mode, .brewing)
+        // Steam temperature is now Strada X-supported (was GS3-only).
+        try await machine.setSteamTargetTemperature(celsius: 126)
+        XCTAssertEqual(machine.dashboard?.steamBoilerTemperature?.targetTemperature, 126)
+    }
+
+    /// Strada X-only commands throw ``LaMarzoccoError/unsupportedModel`` on
+    /// other machines.
+    func testStradaXCommandsThrowOnMicra() async throws {
+        let machine = makeMachine(try fixtureBackend())
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setAutoFlush(on: true)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        do {
+            _ = try await machine.setMode(.eco)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+    }
+
+    /// Brewing pressure requires the group's dose mode to support it — the
+    /// stradax fixture reports `brewingPressureSupported: false`, so the
+    /// command must throw ``LaMarzoccoError/operationNotAvailable`` without
+    /// hitting the network (upstream `OperationNotAvailable` parity).
+    func testBrewingPressureUnavailableThrows() async throws {
+        let backend = try backend(dashboardFixture: "dashboard_stradax")
+        let machine = LaMarzoccoMachine(serialNumber: "SR123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setBrewingPressure(pressure: 9)
+            XCTFail("expected operationNotAvailable")
+        } catch LaMarzoccoError.operationNotAvailable {}
+        XCTAssertEqual(backend.count(pathSuffix: "/command/CoffeeMachineGroupDoseSettingGroupBrewingPressure"), 0)
+    }
+
+    func testSwanGrinderCommands() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_swan", serial: "SG123456")
+        try await machine.refreshDashboard()
+        XCTAssertEqual(machine.model, .swan)
+        XCTAssertEqual(machine.powerState, .on) // GrindingMode
+
+        try await machine.setGrinderPower(on: false)
+        XCTAssertEqual(machine.dashboard?.grinderStatus?.mode, .standby)
+        XCTAssertEqual(machine.powerState, .off)
+
+        // Mode defaults to the dashboard's current dose mode (RevType).
+        try await machine.setGrinderDose(doseIndex: .doseA, dose: 12.0, speedLevel: .low)
+        XCTAssertEqual(machine.dashboard?.grinderDoses?.doses.revType.first?.dose, 12.0)
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseA"]?.level, .low)
+
+        try await machine.setGrinderMoreDose(revolutions: 2.0)
+        XCTAssertEqual(machine.dashboard?.grinderMoreDose?.revolutions, 2.0)
+
+        try await machine.setGrinderGrindWith(.portafilter)
+        XCTAssertEqual(machine.dashboard?.grinderGrindWith?.mode, .portafilter)
+    }
+
+    /// Swan-only grinder commands throw on the Pico.
+    func testSwanCommandsThrowOnPico() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_pico", serial: "GR123456")
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setGrinderGrindWith(.portafilter)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        do {
+            _ = try await machine.setGrinderMoreDose(revolutions: 1)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+    }
+
     // MARK: - Refresh
 
     func testRefreshAllPopulatesState() async throws {

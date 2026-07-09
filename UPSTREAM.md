@@ -12,20 +12,25 @@ already ported from what still needs picking up.
      Keep the format `key: value` on a single line; update both in the same PR
      that lands the port. -->
 
-<!-- upstream-version: v2.3.0 -->
-<!-- upstream-sha: a267213 -->
+<!-- upstream-version: v2.4.2 -->
+<!-- upstream-sha: e2ed742 -->
 
 | | |
 |---|---|
 | **Upstream** | https://github.com/zweckj/pylamarzocco |
-| **Version** | `v2.3.0` |
-| **Commit** | [`a267213`](https://github.com/zweckj/pylamarzocco/commit/a267213) |
-| **Ported** | 2026-06-26 |
-| **Scope** | Cloud protocol, auth/proof, models, websocket, commands, statistics. Bluetooth is excluded by design and is **not** tracked here. |
+| **Version** | `v2.4.2` |
+| **Commit** | [`e2ed742`](https://github.com/zweckj/pylamarzocco/commit/e2ed742) |
+| **Ported** | 2026-07-08 |
+| **Scope** | Cloud protocol, auth/proof, models, websocket, commands, statistics. Includes Strada X + Swan grinder support (v2.4.x). Bluetooth is excluded by design and is **not** tracked here. |
 
-As of this watermark the full cloud surface of `v2.3.0` is ported — there is no
+As of this watermark the full cloud surface of `v2.4.2` is ported — there is no
 known cloud gap below this line. (Bluetooth-only changes upstream are out of
-scope and never advance this watermark.)
+scope and never advance this watermark.) Two modeling notes from the v2.4.2
+port: `MachineSchedule` represents upstream's `str | AutoOnOff | None` union as
+two properties (`autoOnOff` string / `autoOnOffSettings` object — same
+information, exactly one populated); and upstream's v2.4.2 pending-command
+leak fix (pylamarzocco #155) needed no port — Angstrom's `executeCommand`
+already checked the websocket before registering the pending wait.
 
 ### Websocket push semantics (wire findings)
 
@@ -65,8 +70,8 @@ git clone https://github.com/zweckj/pylamarzocco /tmp/pylamarzocco   # first tim
 git -C /tmp/pylamarzocco fetch --tags origin                          # thereafter
 
 # 2. See what landed since the watermark.
-git -C /tmp/pylamarzocco log --oneline a267213..v2.4.0                # replace with target tag
-git -C /tmp/pylamarzocco diff a267213..v2.4.0 -- pylamarzocco/        # the review surface
+git -C /tmp/pylamarzocco log --oneline e2ed742..v2.5.0                # replace with target tag
+git -C /tmp/pylamarzocco diff e2ed742..v2.5.0 -- pylamarzocco/        # the review surface
 
 # 3. Triage each change:
 #    - cloud / auth / proof / models / websocket / commands / stats  -> port to Swift
@@ -81,7 +86,7 @@ Then, **in the same PR that lands the port**:
 3. `swift build && swift test` must pass.
 4. Close the drift tracking issue (or let the next bump's PR reference it).
 
-> Verify the SHA matches the tag: `a267213` should be the commit that
-> `v2.3.0` points to (`git -C /tmp/pylamarzocco rev-parse v2.3.0`). Always record
+> Verify the SHA matches the tag: `e2ed742` should be the commit that
+> `v2.4.2` points to (`git -C /tmp/pylamarzocco rev-parse v2.4.2`). Always record
 > the **tagged release** commit, not an arbitrary `main` SHA, so the watermark
 > corresponds to a real upstream version.

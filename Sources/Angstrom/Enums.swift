@@ -43,6 +43,7 @@ public enum Model: Sendable, Hashable, Codable {
     case gs3
     case gs3AV
     case gs3MP
+    case stradaX
     case pico
     case swan
     /// A model this version doesn't recognize, carrying the raw code/name.
@@ -63,6 +64,7 @@ public enum Model: Sendable, Hashable, Codable {
         case "GS3": return .gs3
         case "GS3AV": return .gs3AV
         case "GS3MP": return .gs3MP
+        case "STRADAX": return .stradaX
         case "PICOGRINDER", "PICO": return .pico
         case "SWANGRINDER", "SWAN": return .swan
         default: return nil
@@ -78,6 +80,7 @@ public enum Model: Sendable, Hashable, Codable {
         case .gs3: "GS3"
         case .gs3AV: "GS3AV"
         case .gs3MP: "GS3MP"
+        case .stradaX: "STRADAX"
         case .pico: "PICOGRINDER"
         case .swan: "SWANGRINDER"
         case .unknown(let raw): raw
@@ -93,6 +96,7 @@ public enum Model: Sendable, Hashable, Codable {
         case .gs3: "GS3"
         case .gs3AV: "GS3 AV"
         case .gs3MP: "GS3 MP"
+        case .stradaX: "Strada X"
         case .pico: "Pico"
         case .swan: "Swan"
         case .unknown(let raw): raw
@@ -283,6 +287,14 @@ public enum DoseMode: Sendable, Hashable, Codable {
     case pulses
     case dose1
     case dose2
+    /// Manual (barista-stopped) dosing (Strada X).
+    case manual
+    /// Mass-based dosing (Strada X).
+    case mass
+    /// Brew-ratio dosing (Strada X).
+    case brewRatio
+    /// Pressure/flow-profile dosing (Strada X).
+    case profile
     case other(String)
 
     public init(rawValue: String) {
@@ -291,6 +303,10 @@ public enum DoseMode: Sendable, Hashable, Codable {
         case "PulsesType": self = .pulses
         case "Dose1": self = .dose1
         case "Dose2": self = .dose2
+        case "ManualType": self = .manual
+        case "MassType": self = .mass
+        case "BrewRatioType": self = .brewRatio
+        case "ProfileType": self = .profile
         default: self = .other(rawValue)
         }
     }
@@ -300,6 +316,10 @@ public enum DoseMode: Sendable, Hashable, Codable {
         case .pulses: "PulsesType"
         case .dose1: "Dose1"
         case .dose2: "Dose2"
+        case .manual: "ManualType"
+        case .mass: "MassType"
+        case .brewRatio: "BrewRatioType"
+        case .profile: "ProfileType"
         case .other(let v): v
         }
     }
@@ -333,6 +353,8 @@ public enum PreExtractionDoseIndex: String, Sendable, Hashable, Codable, CaseIte
 public enum GrinderMode: Sendable, Hashable, Codable {
     case grinding
     case standby
+    /// Awake/idle (reported as `GMachineStatus.status` on the Swan).
+    case poweredOn
     /// A mode this version doesn't recognize, carrying the raw value.
     case other(String)
 
@@ -340,6 +362,7 @@ public enum GrinderMode: Sendable, Hashable, Codable {
         switch rawValue {
         case "GrindingMode": self = .grinding
         case "StandBy": self = .standby
+        case "PoweredOn": self = .poweredOn
         default: self = .other(rawValue)
         }
     }
@@ -347,6 +370,7 @@ public enum GrinderMode: Sendable, Hashable, Codable {
         switch self {
         case .grinding: "GrindingMode"
         case .standby: "StandBy"
+        case .poweredOn: "PoweredOn"
         case .other(let v): v
         }
     }
@@ -364,12 +388,15 @@ public enum GrinderMode: Sendable, Hashable, Codable {
 public enum GrinderDoseMode: Sendable, Hashable, Codable {
     case time
     case mass
+    /// Revolution-count dosing (Swan).
+    case rev
     case other(String)
 
     public init(rawValue: String) {
         switch rawValue {
         case "TimeType": self = .time
         case "MassType": self = .mass
+        case "RevType": self = .rev
         default: self = .other(rawValue)
         }
     }
@@ -377,6 +404,43 @@ public enum GrinderDoseMode: Sendable, Hashable, Codable {
         switch self {
         case .time: "TimeType"
         case .mass: "MassType"
+        case .rev: "RevType"
+        case .other(let v): v
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(rawValue)
+    }
+}
+
+/// A grinder's motor speed level (`GSpeed` / `GDoses.speedLevels`, Swan).
+public enum GrinderSpeedLevel: String, Sendable, Hashable, Codable, CaseIterable {
+    case low = "Low"
+    case medium = "Medium"
+    case high = "High"
+}
+
+/// How a grinder decides when to grind (`GGrindWith.mode`, Swan). Tolerant of
+/// unknown values, matching the other mode enums.
+public enum GrinderGrindWithMode: Sendable, Hashable, Codable {
+    case portafilter
+    case byButton
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "Portafilter": self = .portafilter
+        case "ByButton": self = .byButton
+        default: self = .other(rawValue)
+        }
+    }
+    public var rawValue: String {
+        switch self {
+        case .portafilter: "Portafilter"
+        case .byButton: "ByButton"
         case .other(let v): v
         }
     }
@@ -411,6 +475,7 @@ public enum SmartStandbyAfter: String, Sendable, Hashable, Codable {
 public enum FirmwareType: String, Sendable, Hashable, Codable {
     case machine = "Machine"
     case gateway = "Gateway"
+    case file = "File"
 }
 
 /// Firmware update status.

@@ -117,7 +117,7 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.4 — full cloud parity with `pylamarzocco` (Bluetooth excluded): auth + token refresh,
+v1.5 — full cloud parity with `pylamarzocco` v2.4.2 (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
 observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
@@ -132,4 +132,8 @@ machine drops off the cloud the server serves a frozen "husk" dashboard, and the
 otherwise-stale `powerState`. v1.4 replaces the incremental push merge with wholesale
 widget replacement (upstream parity): wire captures showed every push is a full
 snapshot and `removedWidgets` is a constant complement list, not a delta (see
-UPSTREAM.md). Bluetooth remains out of scope.
+UPSTREAM.md). v1.5 ports upstream v2.4.2: Strada X support (`CMMachineGroupStatus`,
+auto/steam/rinse-flush widgets, group mode/dose/pressure commands, profile + brew-ratio
+dosing, `AutoOnOff`/`EcoMode` scheduling) and the Swan grinder (`GSpeed`/`GMoreDose`/
+`GGrindWith`, rev-based dosing, grinder wake/standby), with model gating and optimistic
+updates in `AngstromUI`. Bluetooth remains out of scope.
