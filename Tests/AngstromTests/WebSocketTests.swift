@@ -454,23 +454,27 @@ final class WebSocketTests: XCTestCase {
         XCTAssertEqual(update.removedWidgetCodes, ["CMNoWater"])
     }
 
-    /// The connectivity flag must flow through the push merge: a
-    /// `connected: false` push flips `machine.isConnected` (and takes the
-    /// pushed `connectionDate`) while untouched widgets survive, and a later
-    /// `connected: true` push flips it back — otherwise the merged dashboard
-    /// could never report offline between REST refreshes.
+    /// The connectivity flag must flow through the push: a `connected: false`
+    /// husk push flips `machine.isConnected` (and takes the pushed
+    /// `connectionDate`), and a later `connected: true` push flips it back —
+    /// otherwise the dashboard could never report offline between REST
+    /// refreshes. The husk's widget snapshot replaces the set, matching REST.
     func testDashboardApplyingPropagatesConnected() throws {
         let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
         XCTAssertTrue(base.machine.isConnected)
-        let widgetCount = base.widgets.count
 
-        let offline = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
-            #"{"connected":false,"connectionDate":1783565955166,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
+        // Shaped like the captured offline husk: one frozen CMMachineStatus.
+        let offline = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data("""
+        { "connected": false, "connectionDate": 1783565955166, "removedWidgets": [], "commands": [],
+          "widgets": [ { "code": "CMMachineStatus", "index": 1,
+            "output": { "status": "Off", "availableModes": ["BrewingMode","StandBy"], "mode": "StandBy",
+                        "nextStatus": null, "brewingStartTime": null } } ] }
+        """.utf8))
         let dropped = base.applying(offline)
         XCTAssertFalse(dropped.machine.isConnected)
         XCTAssertEqual(dropped.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
-        XCTAssertEqual(dropped.widgets.count, widgetCount, "a connectivity-only push must not drop widgets")
-        XCTAssertNotNil(dropped.coffeeBoiler)
+        XCTAssertEqual(dropped.widgets.count, 1, "the husk snapshot replaces the widget set, matching REST")
+        XCTAssertEqual(dropped.machineStatus?.mode, .standby)
 
         let online = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
             #"{"connected":true,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
@@ -480,22 +484,29 @@ final class WebSocketTests: XCTestCase {
                        "a push without connectionDate keeps the last-known date")
     }
 
-    func testDashboardApplyingMerge() throws {
+    /// A push is a full snapshot (122/122 wire captures carry the machine's
+    /// complete widget set), so the widget list is replaced wholesale — parity
+    /// with pylamarzocco's `_websocket_dashboard_update_received`.
+    /// `removedWidgets` is the constant complement list of widgets the machine
+    /// *doesn't* have (not a delta) and is ignored, even when it names a
+    /// pushed widget.
+    func testDashboardApplyingReplacesWidgets() throws {
         let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
         XCTAssertEqual(base.machineStatus?.mode, .standby)
-        XCTAssertNotNil(base.backFlush)
+        XCTAssertNotNil(base.coffeeBoiler)
 
         let update = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data("""
-        { "connected": true, "removedWidgets": [ { "code": "CMBackFlush", "index": 1 } ],
+        { "connected": true, "removedWidgets": [ { "code": "CMMachineStatus", "index": 1 } ],
           "widgets": [ { "code": "CMMachineStatus", "index": 1,
             "output": { "status": "PoweredOn", "availableModes": ["BrewingMode"], "mode": "BrewingMode",
                         "nextStatus": null, "brewingStartTime": null } } ] }
         """.utf8))
 
-        let merged = base.applying(update)
-        XCTAssertEqual(merged.machineStatus?.mode, .brewing) // replaced
-        XCTAssertNil(merged.backFlush)                       // removed
-        XCTAssertNotNil(merged.coffeeBoiler)                 // retained
-        XCTAssertEqual(merged.machine.serialNumber, "MR123456")
+        let replaced = base.applying(update)
+        XCTAssertEqual(replaced.widgets.count, 1, "the push snapshot is authoritative")
+        XCTAssertEqual(replaced.machineStatus?.mode, .brewing)
+        XCTAssertNil(replaced.coffeeBoiler, "widgets absent from the push don't survive")
+        XCTAssertNotNil(replaced.machineStatus, "removedWidgets is not a removal instruction")
+        XCTAssertEqual(replaced.machine.serialNumber, "MR123456")
     }
 }

@@ -76,13 +76,20 @@ public enum ConnectionEvent: Sendable, Hashable {
 
 // MARK: - Pushed dashboard update
 
-/// A dashboard update pushed over the websocket. Carries the same typed widget
-/// schema as ``Dashboard`` plus the websocket-only envelope: which widgets were
-/// removed, and any ``commands`` results (used to confirm pending commands).
+/// A dashboard update pushed over the websocket — a full snapshot of the
+/// machine's live widgets. Carries the same typed widget schema as
+/// ``Dashboard`` plus the websocket-only envelope: the ``removedWidgets``
+/// complement list, and any ``commands`` results (used to confirm pending
+/// commands).
 public struct DashboardUpdate: Sendable, Hashable, Codable {
     public let connected: Bool
     public let widgets: [Widget]
-    /// Widgets the machine dropped since the last update (code + group index).
+    /// The widget codes this machine does *not* have (code + group index). On
+    /// the wire this is a constant complement list — e.g. a Linea Micra push
+    /// always lists the GS3-only and grinder widget codes here — **not** an
+    /// incremental "removed since last update" delta. Decoded for wire-shape
+    /// parity and diagnostics (`angcli`); ``Dashboard/applying(_:)`` ignores
+    /// it, as pylamarzocco does.
     public let removedWidgets: [RemovedWidget]
     /// Results for in-flight commands delivered in this frame.
     public let commands: [CommandResponse]
@@ -123,49 +130,31 @@ public struct DashboardUpdate: Sendable, Hashable, Codable {
     }
 }
 
-/// A widget removed in a ``DashboardUpdate``, identified by code + group index.
+/// An entry in ``DashboardUpdate/removedWidgets`` — a widget code this machine
+/// doesn't have, identified by code + group index.
 public struct RemovedWidget: Sendable, Hashable, Codable {
     public let code: String
     public let index: Int
 }
 
 extension Dashboard {
-    /// Return a new dashboard with `update` applied: widgets are replaced by
-    /// `(code, index)`, removed widgets are dropped, and new widgets appended —
-    /// preserving existing order. The machine identity is retained, except for
-    /// connectivity: ``Machine/isConnected`` takes the push's `connected` flag
-    /// (every routine push carries `true`, so this self-heals in both
-    /// directions) and ``Machine/connectionDate`` is updated when the push
-    /// carries one.
+    /// Return a new dashboard with `update` applied: the widget set is
+    /// replaced wholesale by the push's — parity with pylamarzocco's
+    /// `_websocket_dashboard_update_received` (`dashboard.widgets =
+    /// config.widgets`). A push is a full snapshot: every captured frame
+    /// carries the machine's complete live widget set (see UPSTREAM.md). The
+    /// machine identity is retained, except for connectivity:
+    /// ``Machine/isConnected`` takes the push's `connected` flag (every
+    /// routine push carries `true`, so this self-heals in both directions)
+    /// and ``Machine/connectionDate`` is updated when the push carries one.
     ///
-    /// This **intentionally diverges** from pylamarzocco's
-    /// `_websocket_dashboard_update_received`, which replaces the whole
-    /// dashboard config on push — including `connected` — and ignores
-    /// `removedWidgets`. That relies on every push being a complete snapshot; the
-    /// incremental merge here honors the protocol's explicit `removedWidgets`
-    /// envelope and tolerates a partial frame without dropping widgets the push
-    /// didn't mention. Both behave identically on a full-snapshot push, and the
-    /// connectivity flag flows through either way.
+    /// ``DashboardUpdate/removedWidgets`` is deliberately ignored, as upstream
+    /// does: on the wire it is the constant complement list of widget codes
+    /// the machine *doesn't* have, not an incremental removal instruction.
     public func applying(_ update: DashboardUpdate) -> Dashboard {
-        func key(_ widget: Widget) -> String { "\(widget.code)#\(widget.index)" }
-
-        var order = widgets.map(key)
-        var byKey: [String: Widget] = [:]
-        for widget in widgets { byKey[key(widget)] = widget }
-
-        for widget in update.widgets {
-            let k = key(widget)
-            if byKey[k] == nil { order.append(k) }
-            byKey[k] = widget
-        }
-        for removed in update.removedWidgets {
-            let k = "\(removed.code)#\(removed.index)"
-            order.removeAll { $0 == k }
-            byKey[k] = nil
-        }
         var machine = machine
         machine.isConnected = update.connected
         if let connectionDate = update.connectionDate { machine.connectionDate = connectionDate }
-        return Dashboard(machine: machine, widgets: order.compactMap { byKey[$0] })
+        return Dashboard(machine: machine, widgets: update.widgets)
     }
 }

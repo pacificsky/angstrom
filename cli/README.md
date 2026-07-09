@@ -106,6 +106,14 @@ swift run angcli listen --decoded | jq .decoded
 
 **Findings & open questions** (from captures with this tool):
 
+- **A dashboard push is a full snapshot, not a delta.** Across 122 captured
+  pushes, every frame carried the machine's complete live widget set —
+  identical codes every time. This is why Angstrom (like pylamarzocco)
+  replaces the widget set wholesale on push.
+- **`removedWidgets` is a constant complement list, not a removal delta.**
+  Every push carries the same entries: all the widget codes the machine
+  *doesn't* have (GS3-only widgets on a Micra, grinder `G*` codes, …). It
+  never signals "this widget just went away".
 - Every routine dashboard push carries top-level `"connected": true`. When a
   machine drops off the cloud (switched off / lost Wi-Fi), REST `dump dashboard`
   serves a "husk": `"connected": false`, `connectionDate` frozen at the last

@@ -231,12 +231,19 @@ final class LaMarzoccoMachineTests: XCTestCase {
         channel.push(connectedFrame())
         try await machine.start()
 
-        // The machine drops off the cloud: the push flips the flag while the
-        // frozen status widget keeps reporting the stale mode.
-        channel.push(messageFrame(
-            #"{"connected":false,"connectionDate":1783565955166,"widgets":[],"removedWidgets":[],"commands":[]}"#))
+        // The machine drops off the cloud: a husk push (one frozen
+        // CMMachineStatus, as the REST husk serves) flips the flag and
+        // replaces the widget set, while the frozen status widget keeps
+        // reporting the stale mode.
+        channel.push(messageFrame("""
+        { "connected": false, "connectionDate": 1783565955166, "removedWidgets": [], "commands": [],
+          "widgets": [ { "code": "CMMachineStatus", "index": 1,
+            "output": { "status": "Off", "availableModes": ["BrewingMode","StandBy"], "mode": "StandBy",
+                        "nextStatus": null, "brewingStartTime": null } } ] }
+        """))
         try await waitUntil("offline push applied") { machine.isMachineConnected == false }
         XCTAssertEqual(machine.machineLastConnectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
+        XCTAssertEqual(machine.dashboard?.widgets.count, 1, "the husk snapshot replaces the widget set")
         XCTAssertEqual(machine.powerState, .off, "powerState still derives from the frozen widget")
 
         channel.push(brewingPush) // routine push: carries connected:true
