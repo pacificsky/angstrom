@@ -27,23 +27,32 @@ As of this watermark the full cloud surface of `v2.3.0` is ported — there is n
 known cloud gap below this line. (Bluetooth-only changes upstream are out of
 scope and never advance this watermark.)
 
-### Intentional divergences
+### Websocket push semantics (wire findings)
 
-- **Websocket dashboard merge.** pylamarzocco's
-  `_websocket_dashboard_update_received` replaces the whole dashboard config on
-  every push — including the top-level `connected` flag. Angstrom instead merges
-  pushes incrementally by widget `(code, index)` and honors `removedWidgets`
-  (see `Dashboard.applying(_:)` in `Sources/Angstrom/WebSocket.swift`); the
-  `connected`/`connectionDate` fields still flow through the merge, so the
-  offline signal reaches consumers either way. The `connected` flag is the
-  authoritative offline signal — when a machine drops off the cloud the server
-  serves a "husk" dashboard (`connected: false`, widgets reduced to a frozen
-  `CMMachineStatus`), and pylamarzocco/Home Assistant derive entity availability
-  from it. **Open question (unverified):** whether the server pushes a frame at
-  the moment a machine disconnects, or the topic just goes silent — routine
-  pushes all carry `connected: true` and no disconnect push has been observed in
-  wire captures. To settle it: `swift run angcli listen` while flipping the
-  machine's power switch, then record the finding here and in `cli/README.md`.
+`Dashboard.applying(_:)` replaces the widget set wholesale on every push —
+parity with pylamarzocco's `_websocket_dashboard_update_received`
+(`dashboard.widgets = config.widgets`), with `connected`/`connectionDate`
+flowing onto `Machine` (upstream gets that implicitly by replacing the whole
+config). An earlier incremental merge keyed on `(code, index)` that honored
+`removedWidgets` was removed after wire captures (122 pushes, see
+`cli/README.md`) disproved its premises:
+
+- **Every push is a full snapshot** — each frame carries the machine's
+  complete live widget set.
+- **`removedWidgets` is not a delta** — it is the constant complement list of
+  widget codes the machine *doesn't* have (GS3-only widgets on a Micra,
+  grinder `G*` codes, …), never an incremental removal instruction. Both
+  libraries ignore it for state; Angstrom keeps decoding it for diagnostics.
+
+The `connected` flag is the authoritative offline signal — when a machine
+drops off the cloud the server serves a "husk" dashboard (`connected: false`,
+widgets reduced to a frozen `CMMachineStatus`), and pylamarzocco/Home
+Assistant derive entity availability from it. **Open question (unverified):**
+whether the server pushes a frame at the moment a machine disconnects, or the
+topic just goes silent — routine pushes all carry `connected: true` and no
+disconnect push has been observed in wire captures. To settle it:
+`swift run angcli listen` while flipping the machine's power switch, then
+record the finding here and in `cli/README.md`.
 
 ## Syncing to a newer upstream
 
