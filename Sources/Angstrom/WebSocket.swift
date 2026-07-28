@@ -151,10 +151,24 @@ extension Dashboard {
     /// ``DashboardUpdate/removedWidgets`` is deliberately ignored, as upstream
     /// does: on the wire it is the constant complement list of widget codes
     /// the machine *doesn't* have, not an incremental removal instruction.
+    ///
+    /// A push carrying *no* widgets is treated as a partial frame, not as a
+    /// machine with nothing on it: the last-known widget set is retained
+    /// (upstream parity — pylamarzocco `ee6dfc7`, "Guard partial WS updates",
+    /// gates its assignment on `if config.widgets:`). This also covers the
+    /// case where the `widgets` array itself fails to decode, which
+    /// ``DashboardUpdate/init(from:)`` degrades to an empty list.
+    ///
+    /// Connectivity is applied either way — upstream can gate the whole
+    /// assignment because it never stores `connected` on the dashboard at all
+    /// (the full websocket config goes to its update callback regardless),
+    /// whereas Angstrom folds it into ``Machine``. Skipping it on a partial
+    /// frame would drop the authoritative offline signal.
     public func applying(_ update: DashboardUpdate) -> Dashboard {
         var machine = machine
         machine.isConnected = update.connected
         if let connectionDate = update.connectionDate { machine.connectionDate = connectionDate }
+        guard !update.widgets.isEmpty else { return Dashboard(machine: machine, widgets: widgets) }
         return Dashboard(machine: machine, widgets: update.widgets)
     }
 }

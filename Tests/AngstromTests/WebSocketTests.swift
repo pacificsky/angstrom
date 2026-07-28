@@ -458,7 +458,8 @@ final class WebSocketTests: XCTestCase {
     /// husk push flips `machine.isConnected` (and takes the pushed
     /// `connectionDate`), and a later `connected: true` push flips it back —
     /// otherwise the dashboard could never report offline between REST
-    /// refreshes. The husk's widget snapshot replaces the set, matching REST.
+    /// refreshes. The husk's widget snapshot replaces the set, matching REST;
+    /// the widget-less reconnect push that follows only moves connectivity.
     func testDashboardApplyingPropagatesConnected() throws {
         let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
         XCTAssertTrue(base.machine.isConnected)
@@ -482,6 +483,52 @@ final class WebSocketTests: XCTestCase {
         XCTAssertTrue(restored.machine.isConnected)
         XCTAssertEqual(restored.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166),
                        "a push without connectionDate keeps the last-known date")
+        XCTAssertEqual(restored.widgets.count, 1,
+                       "the reconnect push carries no widgets, so the last-known set is retained")
+        XCTAssertEqual(restored.machineStatus?.mode, .standby)
+    }
+
+    /// A push with an empty `widgets` array is a *partial* frame, not a machine
+    /// with nothing on it — the last-known widget set survives it. Parity with
+    /// pylamarzocco `ee6dfc7` ("Guard partial WS updates"), which gates its
+    /// wholesale assignment on `if config.widgets:`.
+    func testDashboardApplyingKeepsWidgetsOnEmptyPush() throws {
+        let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
+        XCTAssertGreaterThan(base.widgets.count, 1)
+        XCTAssertNotNil(base.coffeeBoiler)
+
+        let partial = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
+            #"{"connected":true,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
+        let kept = base.applying(partial)
+        XCTAssertEqual(kept.widgets, base.widgets, "a widget-less push must not clobber the dashboard")
+        XCTAssertNotNil(kept.coffeeBoiler)
+
+        // The guard must not weaken wholesale replacement for real snapshots.
+        let full = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data("""
+        { "connected": true, "removedWidgets": [], "commands": [],
+          "widgets": [ { "code": "CMMachineStatus", "index": 1,
+            "output": { "status": "PoweredOn", "availableModes": ["BrewingMode"], "mode": "BrewingMode",
+                        "nextStatus": null, "brewingStartTime": null } } ] }
+        """.utf8))
+        XCTAssertEqual(kept.applying(full).widgets.count, 1)
+    }
+
+    /// Deliberate divergence from upstream: pylamarzocco can gate the *whole*
+    /// assignment on non-empty widgets because it never stores `connected` on
+    /// the dashboard (the full websocket config reaches its update callback
+    /// regardless). Angstrom folds connectivity into ``Machine``, so a partial
+    /// frame must still move `isConnected` — otherwise the authoritative
+    /// offline signal would be dropped whenever the frame carries no widgets.
+    func testDashboardApplyingTracksConnectivityOnPartialPush() throws {
+        let base = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: try Fixture.data("dashboard_micra"))
+        XCTAssertTrue(base.machine.isConnected)
+
+        let partial = try JSONDecoder.laMarzocco().decode(DashboardUpdate.self, from: Data(
+            #"{"connected":false,"connectionDate":1783565955166,"widgets":[],"removedWidgets":[],"commands":[]}"#.utf8))
+        let applied = base.applying(partial)
+        XCTAssertFalse(applied.machine.isConnected, "connectivity applies even when widgets are withheld")
+        XCTAssertEqual(applied.machine.connectionDate, Date(timeIntervalSince1970: 1_783_565_955.166))
+        XCTAssertEqual(applied.widgets, base.widgets)
     }
 
     /// A push is a full snapshot (122/122 wire captures carry the machine's
