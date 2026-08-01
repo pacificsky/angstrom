@@ -72,7 +72,8 @@ the newest installed Xcode so the SDK matches the package's deployment targets.
 - **`Statistics.swift`** — `ThingStatistics` + the `StatWidget` union and `/stats` endpoints.
 - **`Stomp.swift` / `WebSocket.swift`** — STOMP codec; `WebSocketChannel` seam,
   `DashboardUpdate`, and `Dashboard.applying(_:)` (wholesale widget replacement —
-  pushes are full snapshots; upstream parity).
+  pushes are full snapshots; upstream parity — except a widget-less push, which is
+  a partial frame and keeps the last-known set while still applying connectivity).
 - **`Optimistic.swift`** — pure `Dashboard.replacing(_:)` + `setting…(_:)` transforms used by
   the device layer for optimistic updates.
 - **`Diagnostics.swift`** — opt-in debug surface for wire-tracing: `RawFrame` +
@@ -117,7 +118,7 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.5 — full cloud parity with `pylamarzocco` v2.4.2 (Bluetooth excluded): auth + token refresh,
+v1.5.1 — full cloud parity with `pylamarzocco` v2.4.3 (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
 observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
@@ -136,4 +137,9 @@ UPSTREAM.md). v1.5 ports upstream v2.4.2: Strada X support (`CMMachineGroupStatu
 auto/steam/rinse-flush widgets, group mode/dose/pressure commands, profile + brew-ratio
 dosing, `AutoOnOff`/`EcoMode` scheduling) and the Swan grinder (`GSpeed`/`GMoreDose`/
 `GGrindWith`, rev-based dosing, grinder wake/standby), with model gating and optimistic
-updates in `AngstromUI`. Bluetooth remains out of scope.
+updates in `AngstromUI`. v1.5.1 ports upstream v2.4.3: a push carrying no widgets is a
+partial frame and keeps the last-known widget set (connectivity still applies — an
+intentional divergence, since Angstrom stores `connected` on `Machine` where upstream
+doesn't store it at all); upstream's new `CMMaintenanceStatus` code ships no payload
+class, so it stays `.unknown(code:)` here until a real payload is captured (see
+UPSTREAM.md). Bluetooth remains out of scope.

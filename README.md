@@ -18,8 +18,8 @@ reimplementation, not a binding.
 
 ## Status
 
-v1.5 covers the full La Marzocco **cloud** surface at parity with
-`pylamarzocco` v2.4.2 (Bluetooth is out of scope). Supported hardware: Linea
+v1.5.1 covers the full La Marzocco **cloud** surface at parity with
+`pylamarzocco` v2.4.3 (Bluetooth is out of scope). Supported hardware: Linea
 Micra, Linea Mini / Mini R, GS3 (AV/MP), **Strada X**, and the Pico and
 **Swan** grinders.
 
@@ -37,7 +37,9 @@ Micra, Linea Mini / Mini R, GS3 (AV/MP), **Strada X**, and the Pico and
 - **Live updates** — a STOMP websocket exposed as an `AsyncStream<DashboardUpdate>`
   with auto-reconnect, enforced ping/pong liveness (zombie sockets self-heal),
   and a `connectionEvents()` stream for reconnect-aware consumers. Each push is
-  a full snapshot and replaces the dashboard's widgets, matching `pylamarzocco`.
+  a full snapshot and replaces the dashboard's widgets, matching `pylamarzocco`;
+  a push carrying no widgets is treated as a partial frame and keeps the
+  last-known set.
 - **Offline detection** — when a machine drops off the cloud the server serves a
   frozen "husk" dashboard; the authoritative `connected` flag is surfaced as
   `Machine.isConnected` and flows through both REST reads and pushes.
