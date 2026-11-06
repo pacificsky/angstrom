@@ -47,7 +47,9 @@ Password:
 On first run the CLI generates a per-install key, registers it with the cloud,
 and saves it to `~/.config/angstrom/installation.json` (mode `0600`); later runs
 reuse it. Only that key and the `isRegistered` flag are persisted — **tokens and
-signed proof headers are never written to disk or printed.**
+signed proof headers are never written to disk or printed.** Printed frames and
+payloads have the STOMP `CONNECT` bearer token and the machine's `bleAuthToken`
+replaced with `**REDACTED**`, so `dump`/`listen` output is safe to paste.
 
 ## Commands
 

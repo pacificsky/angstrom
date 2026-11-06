@@ -335,8 +335,8 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(try dashboard("dashboard_stradax").machine.shotCounterSupported)
     }
 
-    func testShotCounterSupportedCoercesLikeUpstream() throws {
-        // Upstream deserializes with `bool(v)` and defaults to false.
+    func testShotCounterSupportedCoercesBoolAndNumber() throws {
+        // Upstream uses `bool(v)`, default false; we accept Bool or a number.
         func decode(_ value: String) throws -> Bool {
             try JSONDecoder.laMarzocco().decode(
                 Machine.self,

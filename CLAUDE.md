@@ -105,7 +105,7 @@ Authenticates, holds the websocket open, and prints raw STOMP frames (both direc
 decoded `DashboardUpdate` side by side. Commands: `listen` (default), `dump <dashboard|settings|
 schedule>`, `machines`. Persists `InstallationKey` + `isRegistered` to
 `~/.config/angstrom/installation.json` (mode `0600`); never persists/prints tokens or proof
-headers, and masks `bleAuthToken` in printed JSON. See `cli/SPEC.md` for the full design.
+headers, and masks `bleAuthToken` and the STOMP bearer token in printed output. See `cli/SPEC.md` for the full design.
 
 ### Conventions worth keeping
 
@@ -143,6 +143,6 @@ intentional divergence, since Angstrom stores `connected` on `Machine` where ups
 doesn't store it at all); upstream's new `CMMaintenanceStatus` code ships no payload
 class, so it stays `.unknown(code:)` here until a real payload is captured (see
 UPSTREAM.md). v1.6.0 ports upstream v2.5.2, which is mostly Bluetooth (shot counter,
-telemetry): the cloud remainder is `MachineState`/`BoilerStatus.ecoMode`,
+telemetry): the cloud remainder is `MachineState`/`BoilerStatus.eco` (source-breaking for exhaustive switches),
 `Machine.shotCounterSupported`, and — mirroring upstream's log masking — `angcli` now
-redacts `bleAuthToken` in `dump`/`listen` output. Bluetooth remains out of scope.
+redacts `bleAuthToken` (and the STOMP `CONNECT` bearer token) in `dump`/`listen` output. Bluetooth remains out of scope.

@@ -68,30 +68,39 @@ extension RawFrame.Direction {
 
 /// Renders frames as single-line JSON to stdout.
 enum FramePrinter {
-    private static func emit<T: Encodable>(_ value: T) {
+    private static func encodeLine<T: Encodable>(_ value: T) -> String? {
         // ms-epoch dates, matching the wire format, so a decoded push round-trips.
         // A fresh encoder per line keeps this trivially concurrency-safe across
         // the raw and decoded printer tasks (cost is negligible for a debug tool).
         let encoder = JSONEncoder.laMarzocco()
-        guard let data = try? encoder.encode(value), let string = String(data: data, encoding: .utf8) else {
+        guard let data = try? encoder.encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func emit(_ line: String?) {
+        guard let line else {
             Stderr.log("· (failed to encode a frame for output)")
             return
         }
-        Stdout.line(string)
+        Stdout.line(line)
+    }
+
+    /// The stdout line for one raw frame, secrets masked (see ``Redact``).
+    static func rawLine(_ frame: RawFrame, ts: String = Timestamp.now()) -> String? {
+        encodeLine(RawLine(ts: ts, dir: frame.direction.arrow, raw: Redact.secrets(in: frame.text)))
     }
 
     /// Drain the raw-frame tap, printing every frame in both directions.
     static func printRaw(_ stream: AsyncStream<RawFrame>) async {
         for await frame in stream {
-            emit(RawLine(ts: Timestamp.now(), dir: frame.direction.arrow,
-                         raw: Redact.bleAuthToken(in: frame.text)))
+            emit(rawLine(frame))
         }
     }
 
     /// Drain the decoded-update stream, printing Angstrom's view of each push.
     static func printDecoded(_ stream: AsyncStream<DashboardUpdate>) async {
         for await update in stream {
-            emit(DecodedLine(ts: Timestamp.now(), dir: "<<", decoded: update))
+            emit(encodeLine(DecodedLine(ts: Timestamp.now(), dir: "<<", decoded: update)))
         }
     }
 }
@@ -102,7 +111,7 @@ enum PrettyJSON {
     /// Pretty-print verbatim JSON bytes, sorting keys for a stable, diffable
     /// shape and leaving slashes unescaped for readable URLs. Falls back to the
     /// raw UTF-8 if the bytes aren't valid JSON.
-    /// `bleAuthToken` values are masked (see ``Redact``).
+    /// Secrets are masked (see ``Redact``).
     static func string(from data: Data) -> String {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let pretty = try? JSONSerialization.data(
@@ -110,37 +119,59 @@ enum PrettyJSON {
                 options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
               let string = String(data: pretty, encoding: .utf8)
         else {
-            return Redact.bleAuthToken(in: String(data: data, encoding: .utf8) ?? "")
+            return Redact.secrets(in: String(data: data, encoding: .utf8) ?? "")
         }
-        return Redact.bleAuthToken(in: string)
+        return Redact.secrets(in: string)
     }
 }
 
 // MARK: - Redaction
 
-/// Masks the machine's Bluetooth auth token before verbatim JSON reaches stdout.
+/// Masks credentials before verbatim wire text reaches stdout. The library's
+/// `rawRead`/`rawFrames` stay verbatim; masking happens here, at the display
+/// boundary, for two secrets:
 ///
-/// Dashboard, settings, and schedule payloads (and their websocket pushes) are
-/// `Thing`s, which carry a `bleAuthToken`, at the top level and nested in
-/// `coffeeStation`. It's a credential for the machine's local Bluetooth
-/// interface, and `dump`/`listen` output gets pasted into issues and
-/// `UPSTREAM.md` captures. This mirrors pylamarzocco v2.5.0's
-/// `_mask_bluetooth_token`, which masks it in debug logs. As upstream does, only
-/// non-empty string values are masked; `null` and `""` pass through so the shape
-/// stays visible. The library's `rawRead`/`rawFrames` stay verbatim; masking
-/// happens here, at the display boundary.
+/// - **The STOMP `CONNECT` bearer token.** The handshake frame carries
+///   `Authorization:Bearer <accessToken>`, and `listen` taps outbound frames
+///   from before the connect, so it would otherwise print the account's access
+///   token on every (re)connect.
+/// - **`bleAuthToken`.** Dashboard, settings, and schedule payloads are `Thing`s,
+///   which carry the machine's Bluetooth auth token, both at the top level and
+///   nested in `coffeeStation`. This mirrors pylamarzocco v2.5.2's
+///   `_mask_bluetooth_token`, which masks it in debug logs. Upstream masks any
+///   truthy value; the field is typed `str | None`, so this masks non-empty
+///   string values only. `null` and `""` pass through (as upstream), keeping the
+///   payload shape visible.
+///
+/// `dump` and `listen` output gets pasted into issues and `UPSTREAM.md`
+/// captures, so both must be safe to share.
 enum Redact {
     static let placeholder = "**REDACTED**"
 
+    static func secrets(in text: String) -> String {
+        bearerToken(in: bleAuthToken(in: text))
+    }
+
     static func bleAuthToken(in text: String) -> String {
         // A JSON string value: any run of non-quote/non-backslash chars or escapes.
-        guard text.contains("bleAuthToken"),
-              let regex = try? NSRegularExpression(
-                pattern: #""bleAuthToken"(\s*):(\s*)"(?:[^"\\]|\\.)+""#)
+        replace(in: text, ifContains: "bleAuthToken",
+                pattern: #""bleAuthToken"(\s*):(\s*)"(?:[^"\\]|\\.)+""#,
+                template: "\"bleAuthToken\"$1:$2\"\(placeholder)\"")
+    }
+
+    static func bearerToken(in text: String) -> String {
+        // A STOMP header line (`name:value`, value up to end of line).
+        replace(in: text, ifContains: "Bearer",
+                pattern: #"(?mi)^(authorization:[ \t]*bearer[ \t]+)[^\r\n]+"#,
+                template: "$1\(placeholder)")
+    }
+
+    private static func replace(in text: String, ifContains marker: String,
+                                pattern: String, template: String) -> String {
+        guard text.localizedCaseInsensitiveContains(marker),
+              let regex = try? NSRegularExpression(pattern: pattern)
         else { return text }
         return regex.stringByReplacingMatches(
-            in: text,
-            range: NSRange(text.startIndex..., in: text),
-            withTemplate: "\"bleAuthToken\"$1:$2\"\(placeholder)\"")
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
     }
 }

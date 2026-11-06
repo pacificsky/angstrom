@@ -30,28 +30,38 @@ upstream's pending-command leak fix (pylamarzocco #155, v2.4.2) needed no port �
 Angstrom's `executeCommand` already checked the websocket before registering
 the pending wait.
 
-### v2.5.0 – v2.5.2 port notes
+### v2.4.4 – v2.5.2 port notes
 
-Sixteen commits over `v2.4.3`. The bulk is Bluetooth (shot counter, live
+Sixteen commits over `v2.4.3` (ten plus six merges), spanning v2.4.4, v2.5.0,
+v2.5.1, and v2.5.2. The bulk is Bluetooth (shot counter, live
 telemetry, connection callbacks, `BluetoothAuthenticationFailed`) — out of
 scope — plus a Python 3.12 drop, a test-harness migration, and a **move to a
 `src/` layout** (`pylamarzocco/` → `src/pylamarzocco/`; the runbook below now
 diffs that path). The cloud-relevant remainder:
 
-- **`MachineState.ECO_MODE` / `BoilerStatus.ECO_MODE`** (`"EcoMode"`) — ported
-  as `MachineState.ecoMode` / `BoilerStatus.ecoMode`. Upstream added them to
-  map Bluetooth machine modes onto the cloud widgets, but they're plain cloud
-  enum values; Angstrom previously decoded them as `.other("EcoMode")`.
-- **`Thing.shotCounterSupported`** — ported as `Machine.shotCounterSupported`,
-  with upstream's `bool(v)` coercion (missing/`null` → `false`, `0`/`1`
-  accepted). Already present in the real `dashboard_micra_offline` capture.
-- **`_mask_bluetooth_token`** — upstream masks `bleAuthToken` (top-level and
-  nested, non-empty values only) in its debug response logs. Angstrom's
+- **`MachineState.ECO_MODE` / `BoilerStatus.ECO_MODE`** (`"EcoMode"`, v2.5.0)
+  — ported as `MachineState.eco` / `BoilerStatus.eco` (spelled like the
+  existing `MachineMode.eco`). Upstream added them only as targets of its
+  Bluetooth→widget maps (`BLE_MACHINE_STATE` / `BLE_BOILER_STATUS`); there's no
+  evidence yet that the cloud itself sends `"EcoMode"` for these fields. They're
+  ported for enum parity, and Angstrom previously decoded the value as
+  `.other("EcoMode")`. **Source-breaking** for exhaustive `switch`es over
+  either enum.
+- **`Thing.shotCounterSupported`** (v2.5.0) — ported as
+  `Machine.shotCounterSupported`. Upstream coerces with `bool(v)`; Angstrom
+  accepts a Bool or a number (`0` → `false`) and treats missing/`null`/anything
+  else as `false`. Already present in the real `dashboard_micra_offline` capture.
+- **`_mask_bluetooth_token`** (`83289c6`, v2.5.2) — upstream masks
+  `bleAuthToken` (top-level and nested, any truthy value) in its debug response
+  logs. Angstrom's
   library never logs and doesn't model the token, but `angcli dump` and
   `angcli listen` printed it verbatim to stdout; both now mask it at the
-  display boundary (`Redact` in `cli/Sources/angcli/Output.swift`). The
-  library's `rawRead`/`rawFrames` stay verbatim, as upstream's client still
-  returns the token.
+  display boundary (`Redact` in `cli/Sources/angcli/Output.swift`, non-empty
+  strings only — upstream types the field `str | None`). The library's
+  `rawRead`/`rawFrames` stay verbatim, as upstream's client still returns the
+  token. The same review found raw `listen` also printed the STOMP `CONNECT`
+  frame's `Authorization: Bearer` access token (a pre-existing angcli leak, not
+  an upstream change); `Redact` masks that too.
 - **`_dashboard_config_updated` hook / "override widget status" (`6520af7`)**
   — no port: both exist only to overlay Bluetooth shot-counter state onto the
   cloud `CMMachineStatus` widget.
@@ -59,6 +69,12 @@ diffs that path). The cloud-relevant remainder:
   dropping the unused `ws` parameter) — no port: an aiohttp logging detail
   with no wire effect; Angstrom's `URLSessionWebSocketTask` error path is
   unrelated.
+- **Websocket connect tests** (`a763fa2`, `tests/test_websocket_connect.py`) —
+  no code change upstream, but they pin a policy Angstrom deliberately differs
+  on: upstream's loop *ends* on a rejected handshake, a non-`CONNECTED` reply,
+  or a callback error, whereas Angstrom's `maintainConnection` surfaces only
+  the *first* connect's failure and otherwise retries every drop forever with
+  capped backoff (the v1.2 self-healing design for sleep/network gaps).
 
 ### v2.4.3 port notes
 

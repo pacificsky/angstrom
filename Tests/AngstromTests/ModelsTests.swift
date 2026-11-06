@@ -69,15 +69,15 @@ final class ModelsTests: XCTestCase {
 
     func testEcoModeStatesAreTyped() throws {
         // Previously demoted to `.other("EcoMode")`; upstream now names them.
-        XCTAssertEqual(MachineState(rawValue: "EcoMode"), .ecoMode)
-        XCTAssertEqual(BoilerStatus(rawValue: "EcoMode"), .ecoMode)
-        XCTAssertEqual(MachineState.ecoMode.rawValue, "EcoMode")
-        XCTAssertEqual(BoilerStatus.ecoMode.rawValue, "EcoMode")
+        XCTAssertEqual(MachineState(rawValue: "EcoMode"), .eco)
+        XCTAssertEqual(BoilerStatus(rawValue: "EcoMode"), .eco)
+        XCTAssertEqual(MachineState.eco.rawValue, "EcoMode")
+        XCTAssertEqual(BoilerStatus.eco.rawValue, "EcoMode")
 
         // Round-trips through Codable as the bare wire string.
-        let data = try JSONEncoder().encode([MachineState.ecoMode])
+        let data = try JSONEncoder().encode([MachineState.eco])
         XCTAssertEqual(String(decoding: data, as: UTF8.self), #"["EcoMode"]"#)
-        XCTAssertEqual(try JSONDecoder().decode([BoilerStatus].self, from: Data(#"["EcoMode"]"#.utf8)), [.ecoMode])
+        XCTAssertEqual(try JSONDecoder().decode([BoilerStatus].self, from: Data(#"["EcoMode"]"#.utf8)), [.eco])
     }
 
     func testNoStatusWidgetIsUnknown() throws {

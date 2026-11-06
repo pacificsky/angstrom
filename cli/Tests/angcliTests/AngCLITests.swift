@@ -77,6 +77,33 @@ final class RedactTests: XCTestCase {
             + #"{"bleAuthToken" : "**REDACTED**","connected":true}"# + "\u{0}")
     }
 
+    func testRawLineMasksBearerTokenInConnectFrame() throws {
+        // The exact shape openAndRun() sends, as mirrored to the raw tap.
+        let connect = "CONNECT\nhost:lion.lamarzocco.io\naccept-version:1.2,1.1,1.0\n"
+            + "heart-beat:0,0\nAuthorization:Bearer eyJhbGciOi.SECRET.sig\n\n\u{0}"
+        let line = try XCTUnwrap(FramePrinter.rawLine(RawFrame(direction: .outbound, text: connect), ts: "T"))
+        XCTAssertFalse(line.contains("SECRET"), line)
+
+        // The printed line is still valid JSON, with every other header intact.
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String])
+        XCTAssertEqual(object["dir"], ">>")
+        XCTAssertEqual(object["raw"], "CONNECT\nhost:lion.lamarzocco.io\naccept-version:1.2,1.1,1.0\n"
+            + "heart-beat:0,0\nAuthorization:Bearer **REDACTED**\n\n\u{0}")
+    }
+
+    func testRawLineMasksBleAuthTokenInPush() throws {
+        let push = "MESSAGE\ndestination:/ws/sn/MR1/dashboard\n\n"
+            + #"{"bleAuthToken":"SECRET","connected":true}"# + "\u{0}"
+        let line = try XCTUnwrap(FramePrinter.rawLine(RawFrame(direction: .inbound, text: push), ts: "T"))
+        XCTAssertFalse(line.contains("SECRET"), line)
+        XCTAssertTrue(line.contains(Redact.placeholder))
+    }
+
+    func testBearerMaskingLeavesOtherFramesAlone() {
+        let subscribe = "SUBSCRIBE\ndestination:/ws/sn/MR1/dashboard\nack:auto\nid:abc\n\n\u{0}"
+        XCTAssertEqual(Redact.secrets(in: subscribe), subscribe)
+    }
+
     func testLeavesEmptyAndAbsentTokensAlone() {
         XCTAssertEqual(Redact.bleAuthToken(in: #"{"bleAuthToken":""}"#), #"{"bleAuthToken":""}"#)
         XCTAssertEqual(Redact.bleAuthToken(in: "CONNECTED\n\n\u{0}"), "CONNECTED\n\n\u{0}")
