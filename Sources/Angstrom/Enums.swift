@@ -152,6 +152,8 @@ public enum MachineState: Sendable, Hashable, Codable {
     case standby
     case poweredOn
     case brewing
+    /// Eco mode (`EcoMode`; pylamarzocco v2.5.0).
+    case ecoMode
     case off
     /// A state this version doesn't recognize, carrying the raw value.
     case other(String)
@@ -161,6 +163,7 @@ public enum MachineState: Sendable, Hashable, Codable {
         case "StandBy": self = .standby
         case "PoweredOn": self = .poweredOn
         case "Brewing": self = .brewing
+        case "EcoMode": self = .ecoMode
         case "Off": self = .off
         default: self = .other(rawValue)
         }
@@ -171,6 +174,7 @@ public enum MachineState: Sendable, Hashable, Codable {
         case .standby: "StandBy"
         case .poweredOn: "PoweredOn"
         case .brewing: "Brewing"
+        case .ecoMode: "EcoMode"
         case .off: "Off"
         case .other(let v): v
         }
@@ -224,6 +228,8 @@ public enum BoilerStatus: Sendable, Hashable, Codable {
     case heatingUp
     case ready
     case noWater
+    /// Eco mode (`EcoMode`; pylamarzocco v2.5.0).
+    case ecoMode
     case off
     /// A status this version doesn't recognize, carrying the raw value.
     case other(String)
@@ -234,6 +240,7 @@ public enum BoilerStatus: Sendable, Hashable, Codable {
         case "HeatingUp": self = .heatingUp
         case "Ready": self = .ready
         case "NoWater": self = .noWater
+        case "EcoMode": self = .ecoMode
         case "Off": self = .off
         default: self = .other(rawValue)
         }
@@ -245,6 +252,7 @@ public enum BoilerStatus: Sendable, Hashable, Codable {
         case .heatingUp: "HeatingUp"
         case .ready: "Ready"
         case .noWater: "NoWater"
+        case .ecoMode: "EcoMode"
         case .off: "Off"
         case .other(let v): v
         }

@@ -65,6 +65,21 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(try LaMarzoccoCloudClient.parsePowerState(fromDashboard: dashboard(code: "CMMachineStatus", mode: "Brewing")), .other("Brewing"))
     }
 
+    // MARK: - EcoMode states (pylamarzocco v2.5.0)
+
+    func testEcoModeStatesAreTyped() throws {
+        // Previously demoted to `.other("EcoMode")`; upstream now names them.
+        XCTAssertEqual(MachineState(rawValue: "EcoMode"), .ecoMode)
+        XCTAssertEqual(BoilerStatus(rawValue: "EcoMode"), .ecoMode)
+        XCTAssertEqual(MachineState.ecoMode.rawValue, "EcoMode")
+        XCTAssertEqual(BoilerStatus.ecoMode.rawValue, "EcoMode")
+
+        // Round-trips through Codable as the bare wire string.
+        let data = try JSONEncoder().encode([MachineState.ecoMode])
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"["EcoMode"]"#)
+        XCTAssertEqual(try JSONDecoder().decode([BoilerStatus].self, from: Data(#"["EcoMode"]"#.utf8)), [.ecoMode])
+    }
+
     func testNoStatusWidgetIsUnknown() throws {
         let data = Data(#"{ "widgets": [ { "code": "CMSomethingElse", "output": {} } ] }"#.utf8)
         XCTAssertEqual(try LaMarzoccoCloudClient.parsePowerState(fromDashboard: data), .unknown)

@@ -18,8 +18,8 @@ reimplementation, not a binding.
 
 ## Status
 
-v1.5.1 covers the full La Marzocco **cloud** surface at parity with
-`pylamarzocco` v2.4.3 (Bluetooth is out of scope). Supported hardware: Linea
+v1.6.0 covers the full La Marzocco **cloud** surface at parity with
+`pylamarzocco` v2.5.2 (Bluetooth is out of scope). Supported hardware: Linea
 Micra, Linea Mini / Mini R, GS3 (AV/MP), **Strada X**, and the Pico and
 **Swan** grinders.
 
@@ -59,7 +59,7 @@ version the port has been carried to (a weekly CI job flags upstream drift).
 Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/pacificsky/angstrom.git", from: "1.5.0")
+.package(url: "https://github.com/pacificsky/angstrom.git", from: "1.6.0")
 ```
 
 Add `"Angstrom"` for the stateless core client, and/or `"AngstromUI"` for the

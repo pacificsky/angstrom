@@ -83,7 +83,8 @@ enum FramePrinter {
     /// Drain the raw-frame tap, printing every frame in both directions.
     static func printRaw(_ stream: AsyncStream<RawFrame>) async {
         for await frame in stream {
-            emit(RawLine(ts: Timestamp.now(), dir: frame.direction.arrow, raw: frame.text))
+            emit(RawLine(ts: Timestamp.now(), dir: frame.direction.arrow,
+                         raw: Redact.bleAuthToken(in: frame.text)))
         }
     }
 
@@ -101,6 +102,7 @@ enum PrettyJSON {
     /// Pretty-print verbatim JSON bytes, sorting keys for a stable, diffable
     /// shape and leaving slashes unescaped for readable URLs. Falls back to the
     /// raw UTF-8 if the bytes aren't valid JSON.
+    /// `bleAuthToken` values are masked (see ``Redact``).
     static func string(from data: Data) -> String {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let pretty = try? JSONSerialization.data(
@@ -108,8 +110,37 @@ enum PrettyJSON {
                 options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
               let string = String(data: pretty, encoding: .utf8)
         else {
-            return String(data: data, encoding: .utf8) ?? ""
+            return Redact.bleAuthToken(in: String(data: data, encoding: .utf8) ?? "")
         }
-        return string
+        return Redact.bleAuthToken(in: string)
+    }
+}
+
+// MARK: - Redaction
+
+/// Masks the machine's Bluetooth auth token before verbatim JSON reaches stdout.
+///
+/// Dashboard, settings, and schedule payloads (and their websocket pushes) are
+/// `Thing`s, which carry a `bleAuthToken`, at the top level and nested in
+/// `coffeeStation`. It's a credential for the machine's local Bluetooth
+/// interface, and `dump`/`listen` output gets pasted into issues and
+/// `UPSTREAM.md` captures. This mirrors pylamarzocco v2.5.0's
+/// `_mask_bluetooth_token`, which masks it in debug logs. As upstream does, only
+/// non-empty string values are masked; `null` and `""` pass through so the shape
+/// stays visible. The library's `rawRead`/`rawFrames` stay verbatim; masking
+/// happens here, at the display boundary.
+enum Redact {
+    static let placeholder = "**REDACTED**"
+
+    static func bleAuthToken(in text: String) -> String {
+        // A JSON string value: any run of non-quote/non-backslash chars or escapes.
+        guard text.contains("bleAuthToken"),
+              let regex = try? NSRegularExpression(
+                pattern: #""bleAuthToken"(\s*):(\s*)"(?:[^"\\]|\\.)+""#)
+        else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: "\"bleAuthToken\"$1:$2\"\(placeholder)\"")
     }
 }

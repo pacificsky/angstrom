@@ -12,23 +12,53 @@ already ported from what still needs picking up.
      Keep the format `key: value` on a single line; update both in the same PR
      that lands the port. -->
 
-<!-- upstream-version: v2.4.3 -->
-<!-- upstream-sha: 1f43ae0 -->
+<!-- upstream-version: v2.5.2 -->
+<!-- upstream-sha: ce7ad71 -->
 
 | | |
 |---|---|
 | **Upstream** | https://github.com/zweckj/pylamarzocco |
-| **Version** | `v2.4.3` |
-| **Commit** | [`1f43ae0`](https://github.com/zweckj/pylamarzocco/commit/1f43ae0) |
-| **Ported** | 2026-07-28 |
+| **Version** | `v2.5.2` |
+| **Commit** | [`ce7ad71`](https://github.com/zweckj/pylamarzocco/commit/ce7ad71) |
+| **Ported** | 2026-11-06 |
 | **Scope** | Cloud protocol, auth/proof, models, websocket, commands, statistics. Includes Strada X + Swan grinder support (v2.4.x). Bluetooth is excluded by design and is **not** tracked here. |
 
-As of this watermark the full cloud surface of `v2.4.3` is ported — there is no
+As of this watermark the full cloud surface of `v2.5.2` is ported — there is no
 known cloud gap below this line. (Bluetooth-only changes upstream are out of
 scope and never advance this watermark.) Notes carried from earlier ports:
 upstream's pending-command leak fix (pylamarzocco #155, v2.4.2) needed no port —
 Angstrom's `executeCommand` already checked the websocket before registering
 the pending wait.
+
+### v2.5.0 – v2.5.2 port notes
+
+Sixteen commits over `v2.4.3`. The bulk is Bluetooth (shot counter, live
+telemetry, connection callbacks, `BluetoothAuthenticationFailed`) — out of
+scope — plus a Python 3.12 drop, a test-harness migration, and a **move to a
+`src/` layout** (`pylamarzocco/` → `src/pylamarzocco/`; the runbook below now
+diffs that path). The cloud-relevant remainder:
+
+- **`MachineState.ECO_MODE` / `BoilerStatus.ECO_MODE`** (`"EcoMode"`) — ported
+  as `MachineState.ecoMode` / `BoilerStatus.ecoMode`. Upstream added them to
+  map Bluetooth machine modes onto the cloud widgets, but they're plain cloud
+  enum values; Angstrom previously decoded them as `.other("EcoMode")`.
+- **`Thing.shotCounterSupported`** — ported as `Machine.shotCounterSupported`,
+  with upstream's `bool(v)` coercion (missing/`null` → `false`, `0`/`1`
+  accepted). Already present in the real `dashboard_micra_offline` capture.
+- **`_mask_bluetooth_token`** — upstream masks `bleAuthToken` (top-level and
+  nested, non-empty values only) in its debug response logs. Angstrom's
+  library never logs and doesn't model the token, but `angcli dump` and
+  `angcli listen` printed it verbatim to stdout; both now mask it at the
+  display boundary (`Redact` in `cli/Sources/angcli/Output.swift`). The
+  library's `rawRead`/`rawFrames` stay verbatim, as upstream's client still
+  returns the token.
+- **`_dashboard_config_updated` hook / "override widget status" (`6520af7`)**
+  — no port: both exist only to overlay Bluetooth shot-counter state onto the
+  cloud `CMMachineStatus` widget.
+- **Websocket error logging** (`msg.data` instead of `ws.exception()`,
+  dropping the unused `ws` parameter) — no port: an aiohttp logging detail
+  with no wire effect; Angstrom's `URLSessionWebSocketTask` error path is
+  unrelated.
 
 ### v2.4.3 port notes
 
@@ -115,8 +145,8 @@ git clone https://github.com/zweckj/pylamarzocco /tmp/pylamarzocco   # first tim
 git -C /tmp/pylamarzocco fetch --tags origin                          # thereafter
 
 # 2. See what landed since the watermark.
-git -C /tmp/pylamarzocco log --oneline 1f43ae0..v2.5.0                # replace with target tag
-git -C /tmp/pylamarzocco diff 1f43ae0..v2.5.0 -- pylamarzocco/        # the review surface
+git -C /tmp/pylamarzocco log --oneline ce7ad71..v2.5.6                # replace with target tag
+git -C /tmp/pylamarzocco diff ce7ad71..v2.5.6 -- src/pylamarzocco/    # the review surface (src/ layout since v2.5.2)
 
 # 3. Triage each change:
 #    - cloud / auth / proof / models / websocket / commands / stats  -> port to Swift
@@ -131,7 +161,7 @@ Then, **in the same PR that lands the port**:
 3. `swift build && swift test` must pass.
 4. Close the drift tracking issue (or let the next bump's PR reference it).
 
-> Verify the SHA matches the tag: `1f43ae0` should be the commit that
-> `v2.4.3` points to (`git -C /tmp/pylamarzocco rev-parse v2.4.3`). Always record
+> Verify the SHA matches the tag: `ce7ad71` should be the commit that
+> `v2.5.2` points to (`git -C /tmp/pylamarzocco rev-parse v2.5.2`). Always record
 > the **tagged release** commit, not an arbitrary `main` SHA, so the watermark
 > corresponds to a real upstream version.

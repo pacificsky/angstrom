@@ -26,6 +26,10 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
     /// intentionally not modeled — Bluetooth is out of scope.)
     public var coffeeStation: CoffeeStation?
     public var imageURL: URL?
+    /// Whether the machine reports live shot-counter data. Upstream only
+    /// consumes that data over Bluetooth (out of scope here); the flag itself is
+    /// a cloud field, so it's surfaced for consumers that gate UI on it.
+    public var shotCounterSupported: Bool
 
     public var id: String { serialNumber }
     /// Falls back to the serial when the machine has no friendly name.
@@ -46,7 +50,8 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         hasFirmwareUpdateAvailable: Bool = false,
         offlineMode: Bool = false,
         coffeeStation: CoffeeStation? = nil,
-        imageURL: URL? = nil
+        imageURL: URL? = nil,
+        shotCounterSupported: Bool = false
     ) {
         self.serialNumber = serialNumber
         self.name = name
@@ -60,12 +65,13 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         self.offlineMode = offlineMode
         self.coffeeStation = coffeeStation
         self.imageURL = imageURL
+        self.shotCounterSupported = shotCounterSupported
     }
 
     private enum CodingKeys: String, CodingKey {
         case serialNumber, name, modelName, modelCode, type, location
         case connected, connectionDate, requireFirmwareUpdate, availableFirmwareUpdate
-        case offlineMode, coffeeStation, imageUrl
+        case offlineMode, coffeeStation, imageUrl, shotCounterSupported
     }
 
     public init(from decoder: Decoder) throws {
@@ -85,6 +91,11 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         coffeeStation = (try? c.decodeIfPresent(CoffeeStation.self, forKey: .coffeeStation)) ?? nil
         let urlString = (try? c.decodeIfPresent(String.self, forKey: .imageUrl)) ?? nil
         imageURL = urlString.flatMap(URL.init(string:))
+        // Upstream coerces with `bool(v)`, defaulting to false: accept a real
+        // Bool or a 0/1 number; null, missing, or anything else is false.
+        shotCounterSupported = (try? c.decode(Bool.self, forKey: .shotCounterSupported))
+            ?? (try? c.decode(Int.self, forKey: .shotCounterSupported)).map { $0 != 0 }
+            ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -102,6 +113,7 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
         try c.encode(offlineMode, forKey: .offlineMode)
         try c.encodeIfPresent(coffeeStation, forKey: .coffeeStation)
         try c.encodeIfPresent(imageURL?.absoluteString, forKey: .imageUrl)
+        try c.encode(shotCounterSupported, forKey: .shotCounterSupported)
     }
 }
 

@@ -105,7 +105,7 @@ Authenticates, holds the websocket open, and prints raw STOMP frames (both direc
 decoded `DashboardUpdate` side by side. Commands: `listen` (default), `dump <dashboard|settings|
 schedule>`, `machines`. Persists `InstallationKey` + `isRegistered` to
 `~/.config/angstrom/installation.json` (mode `0600`); never persists/prints tokens or proof
-headers. See `cli/SPEC.md` for the full design.
+headers, and masks `bleAuthToken` in printed JSON. See `cli/SPEC.md` for the full design.
 
 ### Conventions worth keeping
 
@@ -118,7 +118,7 @@ headers. See `cli/SPEC.md` for the full design.
 
 ## Status
 
-v1.5.1 — full cloud parity with `pylamarzocco` v2.4.3 (Bluetooth excluded): auth + token refresh,
+v1.6.0 — full cloud parity with `pylamarzocco` v2.5.2 (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
 observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
@@ -142,4 +142,7 @@ partial frame and keeps the last-known widget set (connectivity still applies �
 intentional divergence, since Angstrom stores `connected` on `Machine` where upstream
 doesn't store it at all); upstream's new `CMMaintenanceStatus` code ships no payload
 class, so it stays `.unknown(code:)` here until a real payload is captured (see
-UPSTREAM.md). Bluetooth remains out of scope.
+UPSTREAM.md). v1.6.0 ports upstream v2.5.2, which is mostly Bluetooth (shot counter,
+telemetry): the cloud remainder is `MachineState`/`BoilerStatus.ecoMode`,
+`Machine.shotCounterSupported`, and — mirroring upstream's log masking — `angcli` now
+redacts `bleAuthToken` in `dump`/`listen` output. Bluetooth remains out of scope.

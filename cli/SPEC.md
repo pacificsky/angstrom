@@ -100,7 +100,10 @@ plus richer filtering.
   - The installation key contains a P-256 private-key scalar — treat as a secret.
     Keychain storage is a possible hardening follow-up.
 - **Never print** access/refresh tokens or the signed proof headers. Websocket
-  message bodies are safe to dump.
+  message bodies and REST payloads are safe to dump **once `bleAuthToken` is
+  masked** — `Thing` payloads carry the machine's Bluetooth auth token (top-level
+  and in `coffeeStation`), so `dump` and raw `listen` frames pass through
+  `Redact.bleAuthToken` (mirrors pylamarzocco v2.5.0's log masking).
 
 ## Output
 

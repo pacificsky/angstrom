@@ -53,6 +53,34 @@ final class PrettyJSONTests: XCTestCase {
         let notJSON = Data("CONNECT\nheart-beat:0,0\n\n".utf8)
         XCTAssertEqual(PrettyJSON.string(from: notJSON), "CONNECT\nheart-beat:0,0\n\n")
     }
+
+    func testMasksBleAuthTokenTopLevelAndNested() {
+        let raw = Data(#"""
+        {"bleAuthToken":"SECRET1","serialNumber":"MR1",
+         "coffeeStation":{"coffeeMachine":{"bleAuthToken":"SECRET2"}},
+         "grinders":[{"bleAuthToken":null}]}
+        """#.utf8)
+        let pretty = PrettyJSON.string(from: raw)
+        XCTAssertFalse(pretty.contains("SECRET"))
+        XCTAssertEqual(pretty.components(separatedBy: Redact.placeholder).count - 1, 2)
+        XCTAssertTrue(pretty.contains("\"bleAuthToken\" : null"), "null passes through, like upstream")
+        XCTAssertTrue(pretty.contains("\"serialNumber\" : \"MR1\""), "everything else is verbatim")
+    }
+}
+
+final class RedactTests: XCTestCase {
+    func testMasksInsideRawStompFrame() {
+        let frame = "MESSAGE\ndestination:/ws/sn/MR1/dashboard\n\n"
+            + #"{"bleAuthToken" : "ab\"cd","connected":true}"# + "\u{0}"
+        let masked = Redact.bleAuthToken(in: frame)
+        XCTAssertEqual(masked, "MESSAGE\ndestination:/ws/sn/MR1/dashboard\n\n"
+            + #"{"bleAuthToken" : "**REDACTED**","connected":true}"# + "\u{0}")
+    }
+
+    func testLeavesEmptyAndAbsentTokensAlone() {
+        XCTAssertEqual(Redact.bleAuthToken(in: #"{"bleAuthToken":""}"#), #"{"bleAuthToken":""}"#)
+        XCTAssertEqual(Redact.bleAuthToken(in: "CONNECTED\n\n\u{0}"), "CONNECTED\n\n\u{0}")
+    }
 }
 
 final class InstallationStoreTests: XCTestCase {
