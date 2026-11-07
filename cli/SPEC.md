@@ -99,8 +99,13 @@ plus richer filtering.
   Stored in `~/.config/angstrom/installation.json`, file mode `0600`.
   - The installation key contains a P-256 private-key scalar — treat as a secret.
     Keychain storage is a possible hardening follow-up.
-- **Never print** access/refresh tokens or the signed proof headers. Websocket
-  message bodies are safe to dump.
+- **Never print** access/refresh tokens or the signed proof headers. Every
+  verbatim frame and REST payload passes through `Redact.secrets` before stdout:
+  - the STOMP `CONNECT` frame's `Authorization: Bearer <accessToken>` header
+    (the raw tap captures the handshake, and it repeats on every reconnect);
+  - `bleAuthToken` — `Thing` payloads carry the machine's Bluetooth auth token
+    (top-level and in `coffeeStation`); mirrors pylamarzocco v2.5.2's log
+    masking.
 
 ## Output
 

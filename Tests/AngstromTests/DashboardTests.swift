@@ -202,7 +202,8 @@ final class DashboardTests: XCTestCase {
             model: .lineaMicra, type: .coffeeMachine, location: "Home",
             isConnected: true, connectionDate: Date(timeIntervalSince1970: 1_700_000_000),
             requiresFirmwareUpdate: false, hasFirmwareUpdateAvailable: true,
-            imageURL: URL(string: "https://example.com/x.png")
+            imageURL: URL(string: "https://example.com/x.png"),
+            shotCounterSupported: true
         )
         // The matched encoder/decoder must preserve the date exactly.
         let data = try JSONEncoder.laMarzocco().encode(machine)
@@ -324,6 +325,29 @@ final class DashboardTests: XCTestCase {
             Machine.self, from: Data(#"{"serialNumber":"X"}"#.utf8))
         XCTAssertFalse(m.offlineMode)
         XCTAssertNil(m.coffeeStation)
+        XCTAssertFalse(m.shotCounterSupported)
+    }
+
+    // MARK: - shotCounterSupported (pylamarzocco v2.5.0)
+
+    func testShotCounterSupportedDecodesFromRealCaptures() throws {
+        XCTAssertTrue(try dashboard("dashboard_micra_offline").machine.shotCounterSupported)
+        XCTAssertFalse(try dashboard("dashboard_stradax").machine.shotCounterSupported)
+    }
+
+    func testShotCounterSupportedCoercesBoolAndNumber() throws {
+        // Upstream uses `bool(v)`, default false; we accept Bool or a number.
+        func decode(_ value: String) throws -> Bool {
+            try JSONDecoder.laMarzocco().decode(
+                Machine.self,
+                from: Data(#"{"serialNumber":"X","shotCounterSupported":\#(value)}"#.utf8)
+            ).shotCounterSupported
+        }
+        XCTAssertTrue(try decode("true"))
+        XCTAssertFalse(try decode("false"))
+        XCTAssertTrue(try decode("1"))
+        XCTAssertFalse(try decode("0"))
+        XCTAssertFalse(try decode("null"))
     }
 
     func testBrewByWeightToleratesMissingScaleConnected() throws {
