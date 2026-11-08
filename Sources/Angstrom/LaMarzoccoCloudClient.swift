@@ -194,6 +194,24 @@ public actor LaMarzoccoCloudClient {
         return .unknown
     }
 
+    // MARK: - User
+
+    /// Accept La Marzocco's latest privacy policy (`PUT /users/policy`), as the
+    /// official app does. Call this when a request fails with
+    /// ``LaMarzoccoError/policyAcceptanceRequired``. The optional profiling and
+    /// commercial consents are sent alongside, and both default to `false`
+    /// (pylamarzocco v2.5.3 `accept_privacy_policy`). The response body, which may
+    /// be empty, is ignored.
+    public func acceptPrivacyPolicy(profilePolicy: Bool = false, commercialPolicy: Bool = false) async throws {
+        _ = try await authedJSON(path: "/users/policy", method: "PUT",
+                                 body: PolicyBody(profilePolicy: profilePolicy, commercialPolicy: commercialPolicy))
+    }
+
+    private struct PolicyBody: Encodable, Sendable {
+        let profilePolicy: Bool
+        let commercialPolicy: Bool
+    }
+
     // MARK: - Auth
 
     /// Register this installation's public key with the server (one-time).
@@ -370,10 +388,25 @@ public actor LaMarzoccoCloudClient {
             return data
         case 401:
             throw LaMarzoccoError.authenticationFailed
+        case 403:
+            // pylamarzocco (v2.5.3+): a policy-acceptance 403 gets its own error;
+            // any other 403 is an auth failure. One helper serves every request
+            // (auth/init, sign-in, refresh, REST), as upstream's `_request` does.
+            throw Self.forbiddenError(body: data)
         default:
             let body = String(data: data, encoding: .utf8) ?? ""
             throw LaMarzoccoError.requestFailed(status: http.statusCode, body: String(body.prefix(300)))
         }
+    }
+
+    /// Map a 403 body to ``LaMarzoccoError``: `{"code":"USER_MUST_ACCEPT_POLICY"}`
+    /// → ``LaMarzoccoError/policyAcceptanceRequired``, anything else (including
+    /// a non-JSON body) → ``LaMarzoccoError/authenticationFailed``.
+    static func forbiddenError(body: Data) -> LaMarzoccoError {
+        let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        return object?["code"] as? String == "USER_MUST_ACCEPT_POLICY"
+            ? .policyAcceptanceRequired
+            : .authenticationFailed
     }
 
     private func url(_ path: String) -> URL {

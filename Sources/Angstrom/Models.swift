@@ -189,8 +189,15 @@ public enum PowerState: Sendable, Equatable {
 
 /// Errors thrown by the client.
 public enum LaMarzoccoError: Error, Sendable, Equatable {
-    /// The account credentials were rejected (HTTP 401).
+    /// The account credentials were rejected (HTTP 401), or access was denied
+    /// (HTTP 403 for any reason other than ``policyAcceptanceRequired``) —
+    /// pylamarzocco raises `AuthFail` for both.
     case authenticationFailed
+    /// The account must accept La Marzocco's latest privacy policy before the
+    /// cloud will serve it (HTTP 403, `code: USER_MUST_ACCEPT_POLICY`). Accept it
+    /// in the La Marzocco app, or via
+    /// ``LaMarzoccoCloudClient/acceptPrivacyPolicy(profilePolicy:commercialPolicy:)``.
+    case policyAcceptanceRequired
     /// The persisted ``InstallationKey`` could not be reconstructed.
     case invalidInstallationKey
     /// A request returned a non-success status.
@@ -219,6 +226,8 @@ extension LaMarzoccoError: LocalizedError {
         switch self {
         case .authenticationFailed:
             return "Invalid La Marzocco email or password."
+        case .policyAcceptanceRequired:
+            return "Accept La Marzocco's latest privacy policy (in the La Marzocco app) to continue."
         case .invalidInstallationKey:
             return "Stored installation key is invalid; generate a new one."
         case .requestFailed(let status, let body):

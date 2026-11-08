@@ -358,6 +358,42 @@ public enum PreExtractionDoseIndex: String, Sendable, Hashable, Codable, CaseIte
 // MARK: - Grinder
 
 /// A grinder's running mode (`GMachineStatus.status`/`mode`).
+/// A grinder's state (`GMachineStatus.status`), distinct from its selectable
+/// ``GrinderMode`` (pylamarzocco v2.5.4 `GrinderStatus`).
+public enum GrinderStatus: Sendable, Hashable, Codable {
+    case poweredOn
+    case standby
+    case off
+    case drying
+    /// A status this version doesn't recognize, carrying the raw value.
+    case other(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "PoweredOn": self = .poweredOn
+        case "StandBy": self = .standby
+        case "Off": self = .off
+        case "Drying": self = .drying
+        default: self = .other(rawValue)
+        }
+    }
+    public var rawValue: String {
+        switch self {
+        case .poweredOn: "PoweredOn"
+        case .standby: "StandBy"
+        case .off: "Off"
+        case .drying: "Drying"
+        case .other(let v): v
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(rawValue)
+    }
+}
+
 public enum GrinderMode: Sendable, Hashable, Codable {
     case grinding
     case standby

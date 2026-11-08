@@ -573,21 +573,25 @@ public final class LaMarzoccoMachine {
         return response
     }
 
-    /// Set a grinder dose (and optionally its speed level). When `mode` is nil
+    /// Set a grinder dose, and optionally its speed level. When `mode` is nil
     /// the dashboard's current dose mode is used (falling back to revolutions),
-    /// matching pylamarzocco's `LaMarzoccoGrinder.set_dose`.
+    /// matching pylamarzocco's `LaMarzoccoGrinder.set_dose`. A `speedLevel` is
+    /// sent first as its own command (``setGrinderSpeed(doseIndex:level:)``,
+    /// Swan-only, as in v2.5.4). If that fails, the dose isn't sent.
     @discardableResult
     public func setGrinderDose(
         doseIndex: DoseIndex, dose: Double,
         mode: GrinderDoseMode? = nil, speedLevel: GrinderSpeedLevel? = nil
     ) async throws -> CommandResponse {
+        if let speedLevel {
+            try await setGrinderSpeed(doseIndex: doseIndex, level: speedLevel)
+        }
         let resolvedMode = mode ?? dashboard?.grinderDoses?.mode ?? .rev
         let response = try await capturing {
             try await client.setGrinderDose(serial: serialNumber, doseIndex: doseIndex, dose: dose,
-                                            mode: resolvedMode, speedLevel: speedLevel)
+                                            mode: resolvedMode)
         }
-        dashboard = dashboard?.settingGrinderDose(doseIndex: doseIndex, dose: dose,
-                                                  mode: resolvedMode, speedLevel: speedLevel)
+        dashboard = dashboard?.settingGrinderDose(doseIndex: doseIndex, dose: dose, mode: resolvedMode)
         return response
     }
 
@@ -599,6 +603,78 @@ public final class LaMarzoccoMachine {
             return try await client.setGrinderMoreDose(serial: serialNumber, revolutions: revolutions)
         }
         dashboard = dashboard?.settingGrinderMoreDose(revolutions)
+        return response
+    }
+
+    // MARK: Grinder commands (upstream v2.5.4)
+
+    /// Enable or disable single-dose mode.
+    @discardableResult
+    public func setGrinderSingleDoseMode(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing { try await client.setGrinderSingleDoseMode(serial: serialNumber, on: on) }
+        dashboard = dashboard?.settingGrinderSingleDose(on)
+        return response
+    }
+
+    /// Enable or disable mirroring the doses.
+    @discardableResult
+    public func setGrinderMirrorDoses(on: Bool) async throws -> CommandResponse {
+        let response = try await capturing { try await client.setGrinderMirrorDoses(serial: serialNumber, on: on) }
+        dashboard = dashboard?.settingGrinderMirrorDoses(on)
+        return response
+    }
+
+    /// Set the speed level of a dose (Swan).
+    @discardableResult
+    public func setGrinderSpeed(doseIndex: DoseIndex, level: GrinderSpeedLevel) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.swanGrinderModels, "grinder speed")
+            return try await client.setGrinderSpeed(serial: serialNumber, doseIndex: doseIndex, speedLevel: level)
+        }
+        dashboard = dashboard?.settingGrinderSpeed(doseIndex: doseIndex, level: level)
+        return response
+    }
+
+    /// Enable or disable automatic speed for a dose (Swan). It follows the
+    /// extraction of `groupIndex` on the coffee machine in the same station.
+    @discardableResult
+    public func setGrinderAutoSpeed(doseIndex: DoseIndex, enabled: Bool, groupIndex: Int = 1) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.swanGrinderModels, "automatic grinder speed")
+            return try await client.setGrinderAutoSpeedEnabled(serial: serialNumber, doseIndex: doseIndex,
+                                                               enabled: enabled, groupIndex: groupIndex)
+        }
+        dashboard = dashboard?.settingGrinderAutoSpeed(doseIndex: doseIndex, enabled: enabled, groupIndex: groupIndex)
+        return response
+    }
+
+    /// Set the reference extraction automatic speed adapts to (Swan).
+    /// `doseMode` is `.mass` (with `doseMass` in grams) or `.pulses` (with
+    /// `dosePulses`). `rateLock` keeps the reference flow rate.
+    @discardableResult
+    public func setGrinderAutoSpeedReference(
+        doseMode: DoseMode, extractionSeconds: Double? = nil,
+        doseMass: Double? = nil, dosePulses: Double? = nil, rateLock: Bool = false
+    ) async throws -> CommandResponse {
+        let response = try await capturing {
+            try requireModel(Self.swanGrinderModels, "automatic grinder speed")
+            return try await client.setGrinderAutoSpeedReference(
+                serial: serialNumber, doseMode: doseMode, extractionSeconds: extractionSeconds,
+                doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        }
+        dashboard = dashboard?.settingGrinderAutoSpeedReference(
+            doseMode: doseMode, extractionSeconds: extractionSeconds,
+            doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        return response
+    }
+
+    /// Set the minutes of inactivity after which the grinder goes to standby.
+    /// Updates ``schedule`` optimistically when it holds grinder auto-standby
+    /// settings.
+    @discardableResult
+    public func setGrinderAutoStandby(minutes: Int) async throws -> CommandResponse {
+        let response = try await capturing { try await client.setGrinderAutoStandby(serial: serialNumber, minutes: minutes) }
+        schedule = schedule?.settingAutoStandbyMinutes(minutes)
         return response
     }
 

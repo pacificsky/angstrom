@@ -64,6 +64,8 @@ public struct Dashboard: Sendable, Hashable, Codable {
     public var grinderSpeed: GrinderSpeed? { first { if case .grinderSpeed(let v) = $0 { return v }; return nil } }
     public var grinderMoreDose: GrinderMoreDose? { first { if case .grinderMoreDose(let v) = $0 { return v }; return nil } }
     public var grinderGrindWith: GrinderGrindWith? { first { if case .grinderGrindWith(let v) = $0 { return v }; return nil } }
+    public var grinderMirrorDoses: GrinderMirrorDoses? { first { if case .grinderMirrorDoses(let v) = $0 { return v }; return nil } }
+    public var grinderHopperOpened: GrinderHopperOpened? { first { if case .grinderHopperOpened(let v) = $0 { return v }; return nil } }
 
     /// Codes of widgets this version did not recognize or could not decode.
     public var unknownWidgetCodes: [String] {
@@ -137,6 +139,8 @@ public struct Widget: Sendable, Hashable, Codable {
         case .grinderSpeed(let v): try c.encode(v, forKey: .output)
         case .grinderMoreDose(let v): try c.encode(v, forKey: .output)
         case .grinderGrindWith(let v): try c.encode(v, forKey: .output)
+        case .grinderMirrorDoses(let v): try c.encode(v, forKey: .output)
+        case .grinderHopperOpened(let v): try c.encode(v, forKey: .output)
         case .unknown: break
         }
     }
@@ -167,6 +171,8 @@ public struct Widget: Sendable, Hashable, Codable {
         case "GSpeed": if let v = output(GrinderSpeed.self) { return .grinderSpeed(v) }
         case "GMoreDose": if let v = output(GrinderMoreDose.self) { return .grinderMoreDose(v) }
         case "GGrindWith": if let v = output(GrinderGrindWith.self) { return .grinderGrindWith(v) }
+        case "GMirrorDoses": if let v = output(GrinderMirrorDoses.self) { return .grinderMirrorDoses(v) }
+        case "GHopperOpened": if let v = output(GrinderHopperOpened.self) { return .grinderHopperOpened(v) }
         default: break
         }
         return .unknown(code: code)
@@ -200,6 +206,10 @@ public enum WidgetKind: Sendable, Hashable {
     case grinderSpeed(GrinderSpeed)
     case grinderMoreDose(GrinderMoreDose)
     case grinderGrindWith(GrinderGrindWith)
+    /// `GMirrorDoses` (pylamarzocco v2.5.4).
+    case grinderMirrorDoses(GrinderMirrorDoses)
+    /// `GHopperOpened` alarm (pylamarzocco v2.5.4).
+    case grinderHopperOpened(GrinderHopperOpened)
     /// A widget code this version doesn't model, or whose payload failed to decode.
     case unknown(code: String)
 }
@@ -605,14 +615,16 @@ public struct Scale: Sendable, Hashable, Codable {
 // MARK: - Grinder widgets
 
 public struct GrinderMachineStatus: Sendable, Hashable, Codable {
-    public let status: GrinderMode
+    /// The grinder's state. This is a ``GrinderStatus``, not a ``GrinderMode``:
+    /// it can also be `Off` or `Drying` (pylamarzocco v2.5.4).
+    public let status: GrinderStatus
     public let availableModes: [GrinderMode]
     public let mode: GrinderMode
     public let readyStartTime: Date?
 
     private enum CodingKeys: String, CodingKey { case status, availableModes, mode, readyStartTime }
 
-    public init(status: GrinderMode, availableModes: [GrinderMode], mode: GrinderMode, readyStartTime: Date?) {
+    public init(status: GrinderStatus, availableModes: [GrinderMode], mode: GrinderMode, readyStartTime: Date?) {
         self.status = status
         self.availableModes = availableModes
         self.mode = mode
@@ -621,7 +633,7 @@ public struct GrinderMachineStatus: Sendable, Hashable, Codable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        status = try c.decode(GrinderMode.self, forKey: .status)
+        status = try c.decode(GrinderStatus.self, forKey: .status)
         availableModes = (try? c.decode([GrinderMode].self, forKey: .availableModes)) ?? []
         mode = try c.decode(GrinderMode.self, forKey: .mode)
         readyStartTime = (try? c.decodeIfPresent(Date.self, forKey: .readyStartTime)) ?? nil
@@ -743,14 +755,17 @@ public struct GrinderSpeed: Sendable, Hashable, Codable {
     public let doses: [String: GrinderSpeedDose]
     public let groupsNumber: Int
     public let speedAutoSupported: Bool
-    public let speedAuto: String?
+    /// The reference extraction automatic speed adapts to (pylamarzocco v2.5.4).
+    /// Before 1.7.0 this was an untyped `String?` that could never decode the
+    /// wire object.
+    public let speedAuto: GrinderSpeedAuto?
 
     private enum CodingKeys: String, CodingKey {
         case doses, groupsNumber, speedAutoSupported, speedAuto
     }
 
     public init(doses: [String: GrinderSpeedDose], groupsNumber: Int = 1,
-                speedAutoSupported: Bool = false, speedAuto: String? = nil) {
+                speedAutoSupported: Bool = false, speedAuto: GrinderSpeedAuto? = nil) {
         self.doses = doses
         self.groupsNumber = groupsNumber
         self.speedAutoSupported = speedAutoSupported
@@ -762,7 +777,84 @@ public struct GrinderSpeed: Sendable, Hashable, Codable {
         doses = (try? c.decode([String: GrinderSpeedDose].self, forKey: .doses)) ?? [:]
         groupsNumber = (try? c.decode(Int.self, forKey: .groupsNumber)) ?? 1
         speedAutoSupported = (try? c.decode(Bool.self, forKey: .speedAutoSupported)) ?? false
-        speedAuto = (try? c.decodeIfPresent(String.self, forKey: .speedAuto)) ?? nil
+        speedAuto = (try? c.decodeIfPresent(GrinderSpeedAuto.self, forKey: .speedAuto)) ?? nil
+    }
+}
+
+/// The reference extraction a grinder's automatic speed adapts to
+/// (`GSpeed.speedAuto`, Swan). ``doseMode`` is `MassType` (uses ``doseMass``)
+/// or `PulsesType` (uses ``dosePulses``). The `…Min`/`…Max`/`…Step` fields give
+/// each value's allowed range.
+public struct GrinderSpeedAuto: Sendable, Hashable, Codable {
+    public let doseMode: DoseMode
+    public let availableDoseModes: [DoseMode]
+    public let extractionSeconds: Double?
+    public let extractionSecondsMin: Double?
+    public let extractionSecondsMax: Double?
+    public let extractionSecondsStep: Double?
+    public let doseMass: Double?
+    public let doseMassMin: Double?
+    public let doseMassMax: Double?
+    public let doseMassStep: Double?
+    public let dosePulses: Double?
+    public let dosePulsesMin: Double?
+    public let dosePulsesMax: Double?
+    public let dosePulsesStep: Double?
+    /// Keep the flow rate of the reference extraction.
+    public let rateLock: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case doseMode, availableDoseModes
+        case extractionSeconds, extractionSecondsMin, extractionSecondsMax, extractionSecondsStep
+        case doseMass, doseMassMin, doseMassMax, doseMassStep
+        case dosePulses, dosePulsesMin, dosePulsesMax, dosePulsesStep
+        case rateLock
+    }
+
+    public init(
+        doseMode: DoseMode, availableDoseModes: [DoseMode] = [],
+        extractionSeconds: Double? = nil, extractionSecondsMin: Double? = nil,
+        extractionSecondsMax: Double? = nil, extractionSecondsStep: Double? = nil,
+        doseMass: Double? = nil, doseMassMin: Double? = nil, doseMassMax: Double? = nil, doseMassStep: Double? = nil,
+        dosePulses: Double? = nil, dosePulsesMin: Double? = nil, dosePulsesMax: Double? = nil, dosePulsesStep: Double? = nil,
+        rateLock: Bool = false
+    ) {
+        self.doseMode = doseMode
+        self.availableDoseModes = availableDoseModes
+        self.extractionSeconds = extractionSeconds
+        self.extractionSecondsMin = extractionSecondsMin
+        self.extractionSecondsMax = extractionSecondsMax
+        self.extractionSecondsStep = extractionSecondsStep
+        self.doseMass = doseMass
+        self.doseMassMin = doseMassMin
+        self.doseMassMax = doseMassMax
+        self.doseMassStep = doseMassStep
+        self.dosePulses = dosePulses
+        self.dosePulsesMin = dosePulsesMin
+        self.dosePulsesMax = dosePulsesMax
+        self.dosePulsesStep = dosePulsesStep
+        self.rateLock = rateLock
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Required upstream; without it the whole reference is dropped (nil).
+        doseMode = try c.decode(DoseMode.self, forKey: .doseMode)
+        availableDoseModes = (try? c.decode([DoseMode].self, forKey: .availableDoseModes)) ?? []
+        func number(_ key: CodingKeys) -> Double? { (try? c.decodeIfPresent(Double.self, forKey: key)) ?? nil }
+        extractionSeconds = number(.extractionSeconds)
+        extractionSecondsMin = number(.extractionSecondsMin)
+        extractionSecondsMax = number(.extractionSecondsMax)
+        extractionSecondsStep = number(.extractionSecondsStep)
+        doseMass = number(.doseMass)
+        doseMassMin = number(.doseMassMin)
+        doseMassMax = number(.doseMassMax)
+        doseMassStep = number(.doseMassStep)
+        dosePulses = number(.dosePulses)
+        dosePulsesMin = number(.dosePulsesMin)
+        dosePulsesMax = number(.dosePulsesMax)
+        dosePulsesStep = number(.dosePulsesStep)
+        rateLock = (try? c.decode(Bool.self, forKey: .rateLock)) ?? false
     }
 }
 
@@ -794,6 +886,20 @@ public struct GrinderMoreDose: Sendable, Hashable, Codable {
     public let revolutionsMin: Double
     public let revolutionsMax: Double
     public let revolutionsStep: Double
+}
+
+/// Whether a grinder mirrors its doses (`GMirrorDoses`).
+public struct GrinderMirrorDoses: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
+}
+
+/// The grinder's hopper-opened alarm (`GHopperOpened`). The wire key is
+/// spelled `allarm`, as on ``NoWater``.
+public struct GrinderHopperOpened: Sendable, Hashable, Codable {
+    public let alarm: Bool
+    public init(alarm: Bool) { self.alarm = alarm }
+    private enum CodingKeys: String, CodingKey { case alarm = "allarm" }
 }
 
 /// How the grinder is triggered (`GGrindWith`, Swan).

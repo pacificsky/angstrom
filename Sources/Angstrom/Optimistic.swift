@@ -207,9 +207,8 @@ extension Dashboard {
         return replacing(Widget(code: w.code, index: w.index, kind: .grinderGrindWith(GrinderGrindWith(mode: mode))))
     }
 
-    /// Optimistically set a grinder dose (and optionally its speed level),
-    /// updating the `GDoses` dose list, its `speedLevels`, and the matching
-    /// `GSpeed` entry — mirroring pylamarzocco's `LaMarzoccoGrinder.set_dose`.
+    /// Optimistically set a grinder dose, updating the `GDoses` dose list. With
+    /// a `speedLevel`, this also applies ``settingGrinderSpeed(doseIndex:level:)``.
     public func settingGrinderDose(
         doseIndex: DoseIndex, dose: Double, mode: GrinderDoseMode, speedLevel: GrinderSpeedLevel? = nil
     ) -> Dashboard {
@@ -229,30 +228,88 @@ extension Dashboard {
             let doses = GrinderDosesSettings(timeType: updated(s.doses.timeType, for: .time),
                                              massType: updated(s.doses.massType, for: .mass),
                                              revType: updated(s.doses.revType, for: .rev))
-            let speedLevels = s.speedLevels.map { levels in
-                levels.map { entry in
-                    if let speedLevel, entry.doseIndex == doseIndex {
-                        return GrinderSpeedLevelSetting(doseIndex: entry.doseIndex, level: speedLevel)
-                    }
-                    return entry
-                }
-            }
             let next = GrinderDoses(scaleConnected: s.scaleConnected, mode: s.mode, doses: doses,
-                                    speedLevelsSupported: s.speedLevelsSupported, speedLevels: speedLevels)
+                                    speedLevelsSupported: s.speedLevelsSupported, speedLevels: s.speedLevels)
             result = result.replacing(Widget(code: w.code, index: w.index, kind: .grinderDoses(next)))
         }
-        if let speedLevel,
-           let w = result.widgets.first(where: { $0.code == "GSpeed" }),
-           case .grinderSpeed(let s) = w.kind,
-           let entry = s.doses[doseIndex.rawValue] {
-            var doses = s.doses
-            doses[doseIndex.rawValue] = GrinderSpeedDose(level: speedLevel, autoEnabled: entry.autoEnabled,
-                                                         groupIndex: entry.groupIndex)
-            let next = GrinderSpeed(doses: doses, groupsNumber: s.groupsNumber,
-                                    speedAutoSupported: s.speedAutoSupported, speedAuto: s.speedAuto)
-            result = result.replacing(Widget(code: w.code, index: w.index, kind: .grinderSpeed(next)))
+        if let speedLevel {
+            result = result.settingGrinderSpeed(doseIndex: doseIndex, level: speedLevel)
         }
         return result
+    }
+
+    /// Optimistically set a dose's speed level (after `setGrinderSpeed`, Swan).
+    /// Updates `GDoses.speedLevels` and the matching `GSpeed` entry, mirroring
+    /// pylamarzocco's `LaMarzoccoGrinder.set_speed`.
+    public func settingGrinderSpeed(doseIndex: DoseIndex, level: GrinderSpeedLevel) -> Dashboard {
+        var result = self
+        if let w = result.widgets.first(where: { $0.code == "GDoses" }),
+           case .grinderDoses(let s) = w.kind, let levels = s.speedLevels {
+            let updated = levels.map { entry in
+                entry.doseIndex == doseIndex ? GrinderSpeedLevelSetting(doseIndex: entry.doseIndex, level: level) : entry
+            }
+            let next = GrinderDoses(scaleConnected: s.scaleConnected, mode: s.mode, doses: s.doses,
+                                    speedLevelsSupported: s.speedLevelsSupported, speedLevels: updated)
+            result = result.replacing(Widget(code: w.code, index: w.index, kind: .grinderDoses(next)))
+        }
+        result = result.updatingGrinderSpeedDose(doseIndex) { entry in
+            GrinderSpeedDose(level: level, autoEnabled: entry.autoEnabled, groupIndex: entry.groupIndex)
+        }
+        return result
+    }
+
+    /// Optimistically set a dose's automatic-speed flag and group (after
+    /// `setGrinderAutoSpeed`, Swan).
+    public func settingGrinderAutoSpeed(doseIndex: DoseIndex, enabled: Bool, groupIndex: Int) -> Dashboard {
+        updatingGrinderSpeedDose(doseIndex) { entry in
+            GrinderSpeedDose(level: entry.level, autoEnabled: enabled, groupIndex: groupIndex)
+        }
+    }
+
+    /// Optimistically set the automatic-speed reference extraction (after
+    /// `setGrinderAutoSpeedReference`, Swan). Like upstream, this replaces the
+    /// five settable fields as given (nil included) and keeps the ranges.
+    public func settingGrinderAutoSpeedReference(
+        doseMode: DoseMode, extractionSeconds: Double?, doseMass: Double?, dosePulses: Double?, rateLock: Bool
+    ) -> Dashboard {
+        guard let w = widgets.first(where: { $0.code == "GSpeed" }),
+              case .grinderSpeed(let s) = w.kind, let a = s.speedAuto else { return self }
+        let auto = GrinderSpeedAuto(
+            doseMode: doseMode, availableDoseModes: a.availableDoseModes,
+            extractionSeconds: extractionSeconds, extractionSecondsMin: a.extractionSecondsMin,
+            extractionSecondsMax: a.extractionSecondsMax, extractionSecondsStep: a.extractionSecondsStep,
+            doseMass: doseMass, doseMassMin: a.doseMassMin, doseMassMax: a.doseMassMax, doseMassStep: a.doseMassStep,
+            dosePulses: dosePulses, dosePulsesMin: a.dosePulsesMin, dosePulsesMax: a.dosePulsesMax,
+            dosePulsesStep: a.dosePulsesStep, rateLock: rateLock)
+        let next = GrinderSpeed(doses: s.doses, groupsNumber: s.groupsNumber,
+                                speedAutoSupported: s.speedAutoSupported, speedAuto: auto)
+        return replacing(Widget(code: w.code, index: w.index, kind: .grinderSpeed(next)))
+    }
+
+    /// Rewrite one `GSpeed` dose entry, if present.
+    private func updatingGrinderSpeedDose(_ doseIndex: DoseIndex, _ transform: (GrinderSpeedDose) -> GrinderSpeedDose) -> Dashboard {
+        guard let w = widgets.first(where: { $0.code == "GSpeed" }),
+              case .grinderSpeed(let s) = w.kind,
+              let entry = s.doses[doseIndex.rawValue] else { return self }
+        var doses = s.doses
+        doses[doseIndex.rawValue] = transform(entry)
+        let next = GrinderSpeed(doses: doses, groupsNumber: s.groupsNumber,
+                                speedAutoSupported: s.speedAutoSupported, speedAuto: s.speedAuto)
+        return replacing(Widget(code: w.code, index: w.index, kind: .grinderSpeed(next)))
+    }
+
+    /// Optimistically set the single-dose-mode flag (after `setGrinderSingleDoseMode`).
+    public func settingGrinderSingleDose(_ enabled: Bool) -> Dashboard {
+        guard let w = widgets.first(where: { $0.code == "GSingleDoseMode" }),
+              case .grinderSingleDose = w.kind else { return self }
+        return replacing(Widget(code: w.code, index: w.index, kind: .grinderSingleDose(GrinderSingleDose(enabled: enabled))))
+    }
+
+    /// Optimistically set the mirror-doses flag (after `setGrinderMirrorDoses`).
+    public func settingGrinderMirrorDoses(_ enabled: Bool) -> Dashboard {
+        guard let w = widgets.first(where: { $0.code == "GMirrorDoses" }),
+              case .grinderMirrorDoses = w.kind else { return self }
+        return replacing(Widget(code: w.code, index: w.index, kind: .grinderMirrorDoses(GrinderMirrorDoses(enabled: enabled))))
     }
 
     /// Optimistically set the "more dose" revolutions (after `setGrinderMoreDose`, Swan).

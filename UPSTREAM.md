@@ -12,23 +12,83 @@ already ported from what still needs picking up.
      Keep the format `key: value` on a single line; update both in the same PR
      that lands the port. -->
 
-<!-- upstream-version: v2.5.2 -->
-<!-- upstream-sha: ce7ad71 -->
+<!-- upstream-version: v2.5.6 -->
+<!-- upstream-sha: 4c639ee -->
 
 | | |
 |---|---|
 | **Upstream** | https://github.com/zweckj/pylamarzocco |
-| **Version** | `v2.5.2` |
-| **Commit** | [`ce7ad71`](https://github.com/zweckj/pylamarzocco/commit/ce7ad71) |
-| **Ported** | 2026-11-06 |
+| **Version** | `v2.5.6` |
+| **Commit** | [`4c639ee`](https://github.com/zweckj/pylamarzocco/commit/4c639ee) |
+| **Ported** | 2026-11-08 |
 | **Scope** | Cloud protocol, auth/proof, models, websocket, commands, statistics. Includes Strada X + Swan grinder support (v2.4.x). Bluetooth is excluded by design and is **not** tracked here. |
 
-As of this watermark the full cloud surface of `v2.5.2` is ported — there is no
+As of this watermark the full cloud surface of `v2.5.6` is ported — there is no
 known cloud gap below this line. (Bluetooth-only changes upstream are out of
 scope and never advance this watermark.) Notes carried from earlier ports:
 upstream's pending-command leak fix (pylamarzocco #155, v2.4.2) needed no port —
 Angstrom's `executeCommand` already checked the websocket before registering
 the pending wait.
+
+### v2.5.3 – v2.5.6 port notes
+
+Twenty-two commits over `v2.5.2` (sixteen plus six merges), spanning v2.5.3,
+v2.5.4, v2.5.5, and v2.5.6. Unlike the previous range, this one is mostly
+cloud work:
+
+- **403 handling** (`3e109ea`, v2.5.3; extended to auth calls by `d0a2d78`,
+  v2.5.5) — ported. A 403 whose JSON body has `code: USER_MUST_ACCEPT_POLICY`
+  throws the new `LaMarzoccoError.policyAcceptanceRequired`, and any other 403
+  throws `.authenticationFailed` (upstream's `PolicyAcceptanceRequired` /
+  `AuthFail`). It used to be `.requestFailed(status: 403, …)`. Angstrom's
+  single `send()` already served `auth/init`, sign-in, refresh, and REST,
+  which is the consolidation upstream reached in `d0a2d78`, so every call path
+  is covered. **Divergence (pre-existing policy):** like a 401, a non-policy
+  403 on an authenticated request is retried once with a fresh token.
+  Upstream never retries. A policy 403 is never retried.
+- **`accept_privacy_policy`** (`76d6bce`, v2.5.3) — ported as
+  `acceptPrivacyPolicy(profilePolicy:commercialPolicy:)`:
+  `PUT /users/policy` with `{"profilePolicy", "commercialPolicy"}`, both
+  defaulting to `false`. Upstream also stopped JSON-decoding empty success
+  bodies. Angstrom's `send()` returns raw `Data` and only endpoints that need
+  a body decode it, so that needed no change. The policy call ignores its
+  (possibly empty) body.
+- **Grinder functionality** (`06717ca`, v2.5.4) — ported:
+  - Every grinder payload drops `index`. `setGrinderBaristaLight(serial:on:)`
+    keeps a deprecated `index:` overload that ignores it.
+  - The dose speed level is its own command, `GrinderSettingSpeedForDose`
+    (`setGrinderSpeed`). `setGrinderDose` no longer sends `speedLevel`; a
+    deprecated overload taking `speedLevel:` sends the speed command, then the
+    dose. In `AngstromUI`, `setGrinderDose(…speedLevel:)` does the same, and
+    the speed half is Swan-gated (upstream `set_speed` is
+    `@models_supported(SWAN)`).
+  - New commands: single-dose mode, mirror doses, auto speed (enable per dose
+    and the reference extraction; the reference sends explicit JSON `null`s,
+    as upstream does), and grinder auto standby. All are in `AngstromUI` with
+    upstream's optimistic updates and Swan gating.
+  - Models: `GrinderMachineStatus.status` is now a `GrinderStatus` (`Off` and
+    `Drying` added) rather than a `GrinderMode`. `GSpeed.speedAuto` is a typed
+    `GrinderSpeedAuto` (it was a `String?` that couldn't decode the wire
+    object). New `GMirrorDoses` and `GHopperOpened` widgets. Scheduling's
+    `autoStandBy` is now an `AutoStandBy` union (a mode string on machines, an
+    `AutoStandBySettings` object on grinders), like `AutoOnOff`.
+  - Upstream moved `schedule`/`get_schedule` from its machine class to the
+    base thing. That needs no port: `LaMarzoccoMachine` already serves every
+    device type.
+- **`CommandStatus.FAILED`** (`ca13462`, v2.5.5) — ported as `.failed`.
+  Upstream's strict enum failed the whole websocket message on `"Failed"`,
+  dropping the push and leaving the command to time out (pylamarzocco #170).
+  Angstrom's enum already degraded unknown values to `.other`, so it never had
+  that bug. The new case is for parity, and a websocket test pins that a
+  `Failed` confirmation rejects promptly.
+- **Refactors with no behaviour change** — no port: the `ef0e947` cleanup
+  (`_widget()`, the `_ModeStatus` base, whose field set is identical, shared
+  widget filtering, `STEAM_LEVEL_MODELS`), the rest of `d0a2d78` (one request
+  helper, pending-command cleanup in `finally`, `MachineMode.from_power`, a
+  shared target-temperature setter), and `5be847f` (unreachable aiohttp
+  websocket error branches).
+- **Bluetooth / tooling** — no action: `e0f0249` (BLE `machineCapabilities`
+  family names `LINEA`/`GS3`), test-suite rewrites, version bumps.
 
 ### v2.4.4 – v2.5.2 port notes
 
@@ -161,8 +221,8 @@ git clone https://github.com/zweckj/pylamarzocco /tmp/pylamarzocco   # first tim
 git -C /tmp/pylamarzocco fetch --tags origin                          # thereafter
 
 # 2. See what landed since the watermark.
-git -C /tmp/pylamarzocco log --oneline ce7ad71..v2.5.6                # replace with target tag
-git -C /tmp/pylamarzocco diff ce7ad71..v2.5.6 -- src/pylamarzocco/    # the review surface (src/ layout since v2.5.2)
+git -C /tmp/pylamarzocco log --oneline 4c639ee..v2.6.0                # replace with target tag
+git -C /tmp/pylamarzocco diff 4c639ee..v2.6.0 -- src/pylamarzocco/    # the review surface (src/ layout since v2.5.2)
 
 # 3. Triage each change:
 #    - cloud / auth / proof / models / websocket / commands / stats  -> port to Swift
@@ -177,7 +237,7 @@ Then, **in the same PR that lands the port**:
 3. `swift build && swift test` must pass.
 4. Close the drift tracking issue (or let the next bump's PR reference it).
 
-> Verify the SHA matches the tag: `ce7ad71` should be the commit that
-> `v2.5.2` points to (`git -C /tmp/pylamarzocco rev-parse v2.5.2`). Always record
+> Verify the SHA matches the tag: `4c639ee` should be the commit that
+> `v2.5.6` points to (`git -C /tmp/pylamarzocco rev-parse v2.5.6`). Always record
 > the **tagged release** commit, not an arbitrary `main` SHA, so the watermark
 > corresponds to a real upstream version.

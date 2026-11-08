@@ -18,21 +18,24 @@ reimplementation, not a binding.
 
 ## Status
 
-v1.6.0 covers the full La Marzocco **cloud** surface at parity with
-`pylamarzocco` v2.5.2 (Bluetooth is out of scope). Supported hardware: Linea
+v1.7.0 covers the full La Marzocco **cloud** surface at parity with
+`pylamarzocco` v2.5.6 (Bluetooth is out of scope). Supported hardware: Linea
 Micra, Linea Mini / Mini R, GS3 (AV/MP), **Strada X**, and the Pico and
 **Swan** grinders.
 
-- **Auth** — installation registration, sign-in, token refresh, retry-on-401.
+- **Auth** — installation registration, sign-in, token refresh, retry-on-401,
+  and privacy-policy acceptance (`policyAcceptanceRequired` / `acceptPrivacyPolicy`).
 - **Typed reads** — a polymorphic dashboard widget model (machine/group status,
   coffee & steam boilers, pre-extraction, group/hot-water/brew-by-weight doses,
-  brewing profiles & pressure, flushes, scale, grinder speed/dose), plus
-  `/settings` and `/scheduling` (incl. auto on/off and eco mode).
+  brewing profiles & pressure, flushes, scale, grinder speed/auto-speed/dose/
+  mirror/hopper), plus
+  `/settings` and `/scheduling` (incl. auto on/off, auto standby and eco mode).
 - **Commands** — the full `pylamarzocco` command surface: power & machine/group
   modes, steam, boiler temperatures & enables, steam level, smart standby, auto
   on/off, wake-up schedules, pre-extraction, group/hot-water/brew-by-weight
   doses, brewing pressure, flushes, plumb-in, cup warmer, backflush, grinder
-  wake/dose/speed/light, firmware install — with two-tier websocket
+  wake/dose/speed/auto-speed/single-dose/mirror/light/auto-standby, firmware
+  install — with two-tier websocket
   confirmation and client-side model gating.
 - **Live updates** — a STOMP websocket exposed as an `AsyncStream<DashboardUpdate>`
   with auto-reconnect, enforced ping/pong liveness (zombie sockets self-heal),
@@ -59,7 +62,7 @@ version the port has been carried to (a weekly CI job flags upstream drift).
 Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/pacificsky/angstrom.git", from: "1.6.0")
+.package(url: "https://github.com/pacificsky/angstrom.git", from: "1.7.0")
 ```
 
 Add `"Angstrom"` for the stateless core client, and/or `"AngstromUI"` for the
