@@ -695,6 +695,14 @@ public final class LaMarzoccoMachine {
     /// don't honor `CoffeeMachineSettingSmartStandBy`.
     @discardableResult
     public func setSmartStandby(enabled: Bool, minutes: Int, after: SmartStandbyAfter) async throws -> CommandResponse {
+        // Upstream defines `set_smart_standby` only for coffee machines. A
+        // grinder's standby timeout is its own command.
+        if (dashboard?.machine ?? schedule?.machine)?.type == .grinder {
+            let error = LaMarzoccoError.unsupportedModel(
+                "smart standby is a coffee-machine setting; use setGrinderAutoStandby(minutes:) on grinders")
+            lastError = error
+            throw error
+        }
         if schedule?.autoStandBySupported == true {
             let mode = enabled ? String(format: "%02d:%02d", minutes / 60, minutes % 60) : "Off"
             return try await setAutoStandby(mode: mode)

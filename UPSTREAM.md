@@ -43,9 +43,8 @@ cloud work:
   `AuthFail`). It used to be `.requestFailed(status: 403, …)`. Angstrom's
   single `send()` already served `auth/init`, sign-in, refresh, and REST,
   which is the consolidation upstream reached in `d0a2d78`, so every call path
-  is covered. **Divergence (pre-existing policy):** like a 401, a non-policy
-  403 on an authenticated request is retried once with a fresh token.
-  Upstream never retries. A policy 403 is never retried.
+  is covered. A 403 is never retried. Angstrom's pre-existing
+  retry-once-with-a-fresh-token divergence still applies only to a 401.
 - **`accept_privacy_policy`** (`76d6bce`, v2.5.3) — ported as
   `acceptPrivacyPolicy(profilePolicy:commercialPolicy:)`:
   `PUT /users/policy` with `{"profilePolicy", "commercialPolicy"}`, both
@@ -65,7 +64,12 @@ cloud work:
   - New commands: single-dose mode, mirror doses, auto speed (enable per dose
     and the reference extraction; the reference sends explicit JSON `null`s,
     as upstream does), and grinder auto standby. All are in `AngstromUI` with
-    upstream's optimistic updates and Swan gating.
+    upstream's optimistic updates. The auto-speed commands are Swan-gated, as
+    upstream's are; single-dose, mirror, and auto-standby are ungated.
+  - `AngstromUI.setSmartStandby` now throws `unsupportedModel` on a grinder,
+    instead of sending the coffee-machine auto-standby command. Upstream
+    defines `set_smart_standby` only on its machine class. This became
+    reachable once grinders reported `autoStandBySupported`.
   - Models: `GrinderMachineStatus.status` is now a `GrinderStatus` (`Off` and
     `Drying` added) rather than a `GrinderMode`. `GSpeed.speedAuto` is a typed
     `GrinderSpeedAuto` (it was a `String?` that couldn't decode the wire
@@ -87,8 +91,30 @@ cloud work:
   helper, pending-command cleanup in `finally`, `MachineMode.from_power`, a
   shared target-temperature setter), and `5be847f` (unreachable aiohttp
   websocket error branches).
-- **Bluetooth / tooling** — no action: `e0f0249` (BLE `machineCapabilities`
-  family names `LINEA`/`GS3`), test-suite rewrites, version bumps.
+- **`e0f0249` model-name aliases** (v2.5.6) — no port. Upstream adds
+  `"GS3"` → GS3 AV and `"LINEA"` → Linea Mini to `ModelName.from_string`. The
+  aliases target Bluetooth `machineCapabilities` family names, but that
+  function also deserializes cloud `modelName`. Angstrom resolves `modelCode`
+  first and only falls back to the name. Before v2.5.6, upstream *rejected*
+  these names (a `ValueError`), so the cloud evidently doesn't send them.
+  Angstrom's `"GS3"` → `.gs3` stays.
+- **Tooling** — no action: test-suite rewrites, version bumps.
+
+**Source-breaking for consumers (shipped as v1.7.0, following the 1.5.0/1.6.0
+precedent):**
+- `GrinderMachineStatus.status` is now `GrinderStatus`, not `GrinderMode`.
+- `GrinderSpeed.speedAuto` is now `GrinderSpeedAuto?`, not `String?`.
+- `MachineSchedule.autoStandBy` is now `AutoStandBy?`, not `String?`. Use
+  `.modeString`.
+- New enum cases break exhaustive `switch`es:
+  `LaMarzoccoError.policyAcceptanceRequired`, `CommandStatus.failed`,
+  `WidgetKind.grinderMirrorDoses` / `.grinderHopperOpened`. Code matching
+  `CommandStatus.other("Failed")` no longer matches.
+- A 403 now throws `.authenticationFailed` / `.policyAcceptanceRequired`
+  instead of `.requestFailed(status: 403, …)`.
+
+The two removed upstream parameters (barista light `index:`, dose
+`speedLevel:`) keep deprecated overloads, so those call sites still compile.
 
 ### v2.4.4 – v2.5.2 port notes
 

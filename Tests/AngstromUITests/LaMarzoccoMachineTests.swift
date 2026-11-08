@@ -302,6 +302,20 @@ final class LaMarzoccoMachineTests: XCTestCase {
         XCTAssertEqual(mirrored.grinderMirrorDoses?.enabled, true)
     }
 
+    /// Upstream's `set_smart_standby` is coffee-machine only, so on a grinder it
+    /// must not send `CoffeeMachineSettingAutoStandBy`.
+    func testSmartStandbyThrowsOnGrinderWithoutSending() async throws {
+        let backend = try backend(dashboardFixture: "dashboard_swan")
+        let machine = LaMarzoccoMachine(serialNumber: "SG123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setSmartStandby(enabled: true, minutes: 10, after: .lastBrewing)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        XCTAssertEqual(backend.recordedPaths.filter { $0.contains("/command/") }, [])
+        XCTAssertNotNil(machine.lastError)
+    }
+
     /// Swan-only grinder commands throw on the Pico.
     func testSwanCommandsThrowOnPico() async throws {
         let machine = try machine(dashboardFixture: "dashboard_pico", serial: "GR123456")

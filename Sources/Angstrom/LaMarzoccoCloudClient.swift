@@ -304,13 +304,18 @@ public actor LaMarzoccoCloudClient {
     func authed(path: String, method: String, bodyData: Data? = nil) async throws -> Data {
         let bearer = try await accessToken()
         do {
-            return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData))
-        } catch LaMarzoccoError.authenticationFailed {
+            return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData),
+                                  distinguishing401: true)
+        } catch is Unauthorized401 {
             // Token rejected mid-flight. Invalidate it (unless another fetch has
             // already replaced it) and retry once with a fresh token. This is
             // deliberately more forgiving than pylamarzocco, which surfaces the
             // 401 immediately: a 401 means the request was *not* applied, so even
-            // a non-idempotent command POST is safe to re-send once.
+            // a non-idempotent command POST is safe to re-send once. Only a 401
+            // retries. A 403 (``LaMarzoccoError/authenticationFailed`` or
+            // ``LaMarzoccoError/policyAcceptanceRequired``) surfaces at once, as
+            // upstream does. A fresh token won't help a forbidden request, and
+            // a retry would re-send it after a password sign-in.
             if token?.accessToken == bearer { token = nil }
             let retry = try await accessToken()
             return try await send(authedRequest(path: path, method: method, bearer: retry, bodyData: bodyData))
@@ -370,8 +375,13 @@ public actor LaMarzoccoCloudClient {
         return confirmation
     }
 
+    /// Thrown by ``send(_:distinguishing401:)`` in place of
+    /// ``LaMarzoccoError/authenticationFailed`` for a 401 when the caller asks,
+    /// so ``authed(path:method:bodyData:)`` can retry 401s (and only 401s).
+    private struct Unauthorized401: Error {}
+
     @discardableResult
-    private func send(_ request: URLRequest) async throws -> Data {
+    private func send(_ request: URLRequest, distinguishing401: Bool = false) async throws -> Data {
         log?("\(request.httpMethod ?? "?") \(request.url?.path ?? "")")
         let data: Data
         let response: URLResponse
@@ -387,6 +397,7 @@ public actor LaMarzoccoCloudClient {
         case 200...299:
             return data
         case 401:
+            if distinguishing401 { throw Unauthorized401() }
             throw LaMarzoccoError.authenticationFailed
         case 403:
             // pylamarzocco (v2.5.3+): a policy-acceptance 403 gets its own error;

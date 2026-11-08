@@ -357,7 +357,6 @@ public enum PreExtractionDoseIndex: String, Sendable, Hashable, Codable, CaseIte
 
 // MARK: - Grinder
 
-/// A grinder's running mode (`GMachineStatus.status`/`mode`).
 /// A grinder's state (`GMachineStatus.status`), distinct from its selectable
 /// ``GrinderMode`` (pylamarzocco v2.5.4 `GrinderStatus`).
 public enum GrinderStatus: Sendable, Hashable, Codable {
@@ -394,10 +393,12 @@ public enum GrinderStatus: Sendable, Hashable, Codable {
     }
 }
 
+/// A grinder's selectable running mode (`GMachineStatus.mode`/`availableModes`).
 public enum GrinderMode: Sendable, Hashable, Codable {
     case grinding
     case standby
-    /// Awake/idle (reported as `GMachineStatus.status` on the Swan).
+    /// Awake/idle. Upstream lists it as a mode; the same string also
+    /// appears as a ``GrinderStatus``.
     case poweredOn
     /// A mode this version doesn't recognize, carrying the raw value.
     case other(String)

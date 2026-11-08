@@ -256,7 +256,7 @@ final class AuthTests: XCTestCase {
         } catch LaMarzoccoError.policyAcceptanceRequired {}
     }
 
-    func testOtherForbiddenIsAuthFailureAndRetriedOnceLikeA401() async throws {
+    func testOtherForbiddenIsAuthFailureWithoutRetry() async throws {
         let backend = MockBackend()
         backend.onRequest { req in
             let path = req.url?.path ?? ""
@@ -268,7 +268,10 @@ final class AuthTests: XCTestCase {
             _ = try await makeClient(backend: backend).machines()
             XCTFail("expected authenticationFailed")
         } catch LaMarzoccoError.authenticationFailed {
-            XCTAssertEqual(backend.count(pathSuffix: "/things"), 2, "retried once, as for a 401")
+            // Unlike a 401, a 403 isn't retried: no token reset, no extra
+            // password sign-in, no duplicate request (upstream never retries).
+            XCTAssertEqual(backend.count(pathSuffix: "/things"), 1)
+            XCTAssertEqual(backend.count(pathSuffix: "/auth/signin"), 1)
         }
     }
 

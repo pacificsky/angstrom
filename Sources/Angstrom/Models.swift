@@ -197,6 +197,8 @@ public enum LaMarzoccoError: Error, Sendable, Equatable {
     /// cloud will serve it (HTTP 403, `code: USER_MUST_ACCEPT_POLICY`). Accept it
     /// in the La Marzocco app, or via
     /// ``LaMarzoccoCloudClient/acceptPrivacyPolicy(profilePolicy:commercialPolicy:)``.
+    /// That call needs a signed-in token, so if sign-in itself is what returns
+    /// this error, only the official app can clear it.
     case policyAcceptanceRequired
     /// The persisted ``InstallationKey`` could not be reconstructed.
     case invalidInstallationKey
@@ -225,7 +227,7 @@ extension LaMarzoccoError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .authenticationFailed:
-            return "Invalid La Marzocco email or password."
+            return "La Marzocco rejected the sign-in or denied access. Check your email and password."
         case .policyAcceptanceRequired:
             return "Accept La Marzocco's latest privacy policy (in the La Marzocco app) to continue."
         case .invalidInstallationKey:
