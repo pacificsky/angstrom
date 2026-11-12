@@ -79,8 +79,8 @@ final class CommandTests: XCTestCase {
         let backend = commandBackend()
         try await client(backend).setGrinderBaristaLight(serial: "G1", on: true)
         let b = try body(backend, "GrinderSettingBaristaLightEnabled")
-        XCTAssertEqual(b["index"] as? Int, 1)
-        XCTAssertEqual(b["enabled"] as? Bool, true)
+        // pylamarzocco v2.5.4 dropped `index` from every grinder payload.
+        XCTAssertEqual(b as NSDictionary, ["enabled": true] as NSDictionary)
     }
 
     func testSteamTargetTemperatureUsesSteamCommandString() async throws {
@@ -190,7 +190,7 @@ final class CommandTests: XCTestCase {
         XCTAssertEqual(mirror["enabled"] as? Bool, true)
     }
 
-    // MARK: Grinder commands (upstream v2.4.2)
+    // MARK: Grinder commands (upstream v2.4.2 → v2.5.4 payloads)
 
     func testGrinderModeAndSwanCommands() async throws {
         let backend = commandBackend()
@@ -198,27 +198,74 @@ final class CommandTests: XCTestCase {
         try await c.setGrinderMode(serial: "G1", .grinding)
         XCTAssertEqual(try body(backend, "GrinderChangeMode")["mode"] as? String, "GrindingMode")
 
+        // No `index` in any grinder payload since v2.5.4: assert exact bodies.
         try await c.setGrinderGrindWith(serial: "G1", .portafilter)
-        let grindWith = try body(backend, "GrinderSettingGrindWithMode")
-        XCTAssertEqual(grindWith["index"] as? Int, 1)
-        XCTAssertEqual(grindWith["mode"] as? String, "Portafilter")
+        XCTAssertEqual(try body(backend, "GrinderSettingGrindWithMode") as NSDictionary,
+                       ["mode": "Portafilter"] as NSDictionary)
 
-        try await c.setGrinderDose(serial: "G1", doseIndex: .doseA, dose: 9.5, mode: .rev, speedLevel: .high)
-        let dose = try body(backend, "GrinderSettingDose")
-        XCTAssertEqual(dose["index"] as? Int, 1)
-        XCTAssertEqual(dose["mode"] as? String, "RevType")
-        XCTAssertEqual(dose["doseIndex"] as? String, "DoseA")
-        XCTAssertEqual(dose["dose"] as? Double, 9.5)
-        XCTAssertEqual(dose["speedLevel"] as? String, "High")
-
-        try await c.setGrinderDose(serial: "G1", doseIndex: .doseB, dose: 3.0, mode: .time)
-        let noSpeed = try body(backend, "GrinderSettingDose")
-        XCTAssertNil(noSpeed["speedLevel"], "speedLevel key omitted when not provided")
+        try await c.setGrinderDose(serial: "G1", doseIndex: .doseA, dose: 9.5, mode: .rev)
+        XCTAssertEqual(try body(backend, "GrinderSettingDose") as NSDictionary,
+                       ["mode": "RevType", "doseIndex": "DoseA", "dose": 9.5] as NSDictionary)
 
         try await c.setGrinderMoreDose(serial: "G1", revolutions: 1.5)
-        let more = try body(backend, "GrinderSettingMoreDose")
-        XCTAssertEqual(more["index"] as? Int, 1)
-        XCTAssertEqual(more["revolutions"] as? Double, 1.5)
+        XCTAssertEqual(try body(backend, "GrinderSettingMoreDose") as NSDictionary,
+                       ["revolutions": 1.5] as NSDictionary)
+    }
+
+    // MARK: Grinder commands (upstream v2.5.4)
+
+    func testGrinderV254Commands() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+
+        try await c.setGrinderSingleDoseMode(serial: "G1", on: true)
+        XCTAssertEqual(try body(backend, "GrinderSettingSingleDoseModeEnabled") as NSDictionary,
+                       ["enabled": true] as NSDictionary)
+
+        try await c.setGrinderMirrorDoses(serial: "G1", on: false)
+        XCTAssertEqual(try body(backend, "GrinderSettingMirrorDosesEnabled") as NSDictionary,
+                       ["enabled": false] as NSDictionary)
+
+        try await c.setGrinderSpeed(serial: "G1", doseIndex: .doseB, speedLevel: .high)
+        XCTAssertEqual(try body(backend, "GrinderSettingSpeedForDose") as NSDictionary,
+                       ["doseIndex": "DoseB", "speedLevel": "High"] as NSDictionary)
+
+        try await c.setGrinderAutoSpeedEnabled(serial: "G1", doseIndex: .doseA, enabled: true)
+        XCTAssertEqual(try body(backend, "GrinderSettingAutoSpeedDoseEnabled") as NSDictionary,
+                       ["doseIndex": "DoseA", "groupIndex": 1, "enabled": true] as NSDictionary)
+
+        try await c.setGrinderAutoStandby(serial: "G1", minutes: 15)
+        XCTAssertEqual(try body(backend, "GrinderSettingAutoStandBy") as NSDictionary,
+                       ["standByMinutes": 15] as NSDictionary)
+    }
+
+    func testGrinderAutoSpeedReferenceSendsExplicitNulls() async throws {
+        let backend = commandBackend()
+        try await client(backend).setGrinderAutoSpeedReference(
+            serial: "G1", doseMode: .mass, extractionSeconds: 28, doseMass: 18.5)
+        // Upstream sends every key, with None as JSON null.
+        XCTAssertEqual(try body(backend, "GrinderSettingAutoSpeedDose") as NSDictionary, [
+            "doseMode": "MassType", "extractionSeconds": 28, "doseMass": 18.5,
+            "dosePulses": NSNull(), "rateLock": false,
+        ] as NSDictionary)
+    }
+
+    @available(*, deprecated)
+    func testDeprecatedGrinderOverloadsStillWork() async throws {
+        let backend = commandBackend()
+        let c = client(backend)
+        // The old index parameter is accepted and ignored.
+        try await c.setGrinderBaristaLight(serial: "G1", on: true, index: 2)
+        XCTAssertEqual(try body(backend, "GrinderSettingBaristaLightEnabled") as NSDictionary,
+                       ["enabled": true] as NSDictionary)
+
+        // The old inline speedLevel becomes a speed command, then the dose.
+        try await c.setGrinderDose(serial: "G1", doseIndex: .doseA, dose: 9.5, mode: .rev, speedLevel: .low)
+        let commands = backend.recordedPaths.filter { $0.contains("/command/Grinder") }
+        XCTAssertEqual(commands.suffix(2).map { $0.components(separatedBy: "/").last },
+                       ["GrinderSettingSpeedForDose", "GrinderSettingDose"])
+        XCTAssertEqual(try body(backend, "GrinderSettingSpeedForDose")["speedLevel"] as? String, "Low")
+        XCTAssertNil(try body(backend, "GrinderSettingDose")["speedLevel"])
     }
 
     func testCommandReturnsResponse() async throws {
@@ -338,5 +385,13 @@ final class CommandTests: XCTestCase {
             [CommandResponse].self, from: Data(#"[{"id":"y","status":"Success"}]"#.utf8))
         XCTAssertEqual(success.first?.status, .success)
         XCTAssertNil(success.first?.errorCode)
+    }
+
+    func testFailedCommandStatusIsTyped() throws {
+        // pylamarzocco v2.5.5: a machine that rejects a command answers `Failed`.
+        let failed = try JSONDecoder.laMarzocco().decode(
+            [CommandResponse].self, from: Data(#"[{"id":"z","status":"Failed","errorCode":"E1"}]"#.utf8))
+        XCTAssertEqual(failed.first?.status, .failed)
+        XCTAssertEqual(CommandStatus.failed.rawValue, "Failed")
     }
 }

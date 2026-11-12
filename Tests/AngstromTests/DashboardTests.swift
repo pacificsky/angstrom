@@ -140,6 +140,72 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(d.grinderGrindWith?.mode, .byButton)
     }
 
+    /// Port of upstream's `test_swan_dashboard_auto_speed` (v2.5.4): the real
+    /// Swan capture, extended with the app-DTO shapes upstream uses for auto
+    /// speed, mirror doses, the hopper alarm, and the `Drying` status.
+    func testSwanAutoSpeedMirrorHopperAndDrying() throws {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try Fixture.data("dashboard_swan")) as? [String: Any])
+        var widgets = try XCTUnwrap(root["widgets"] as? [[String: Any]])
+        for i in widgets.indices {
+            var output = widgets[i]["output"] as? [String: Any] ?? [:]
+            switch widgets[i]["code"] as? String {
+            case "GMachineStatus":
+                output["status"] = "Drying"
+            case "GSpeed":
+                var doses = try XCTUnwrap(output["doses"] as? [String: [String: Any]])
+                doses["DoseA"]?["autoEnabled"] = true
+                doses["DoseA"]?["groupIndex"] = 1
+                output["doses"] = doses
+                output["speedAutoSupported"] = true
+                output["speedAuto"] = [
+                    "doseMode": "MassType", "availableDoseModes": ["MassType", "PulsesType"],
+                    "extractionSeconds": 28, "doseMass": 36, "dosePulses": NSNull(), "rateLock": false,
+                ] as [String: Any]
+            default: break
+            }
+            widgets[i]["output"] = output
+        }
+        widgets += [
+            ["code": "GMirrorDoses", "index": 1, "output": ["enabled": true]],
+            ["code": "GHopperOpened", "index": 1, "output": ["allarm": false]],
+        ]
+        root["widgets"] = widgets
+        let d = try JSONDecoder.laMarzocco().decode(
+            Dashboard.self, from: JSONSerialization.data(withJSONObject: root))
+
+        XCTAssertEqual(d.unknownWidgetCodes, [])
+        XCTAssertEqual(d.grinderStatus?.status, .drying)
+        XCTAssertEqual(d.grinderSpeed?.doses["DoseA"]?.autoEnabled, true)
+        XCTAssertEqual(d.grinderSpeed?.doses["DoseA"]?.groupIndex, 1)
+        XCTAssertEqual(d.grinderSpeed?.speedAutoSupported, true)
+        XCTAssertEqual(d.grinderSpeed?.speedAuto, GrinderSpeedAuto(
+            doseMode: .mass, availableDoseModes: [.mass, .pulses],
+            extractionSeconds: 28, doseMass: 36, dosePulses: nil, rateLock: false))
+        XCTAssertEqual(d.grinderMirrorDoses, GrinderMirrorDoses(enabled: true))
+        XCTAssertEqual(d.grinderHopperOpened, GrinderHopperOpened(alarm: false))
+
+        // Round-trips through the matched encoder/decoder (snapshot path).
+        let restored = try JSONDecoder.laMarzocco().decode(Dashboard.self, from: JSONEncoder.laMarzocco().encode(d))
+        XCTAssertEqual(restored.grinderSpeed, d.grinderSpeed)
+        XCTAssertEqual(restored.grinderHopperOpened, d.grinderHopperOpened)
+        XCTAssertEqual(restored.grinderMirrorDoses, d.grinderMirrorDoses)
+    }
+
+    func testGrinderStatusValues() {
+        XCTAssertEqual(GrinderStatus(rawValue: "PoweredOn"), .poweredOn)
+        XCTAssertEqual(GrinderStatus(rawValue: "StandBy"), .standby)
+        XCTAssertEqual(GrinderStatus(rawValue: "Off"), .off)
+        XCTAssertEqual(GrinderStatus(rawValue: "Drying"), .drying)
+        XCTAssertEqual(GrinderStatus(rawValue: "Future"), .other("Future"))
+    }
+
+    func testSpeedAutoWithoutDoseModeIsDroppedNotFatal() throws {
+        let json = #"{"doses":{},"groupsNumber":1,"speedAutoSupported":true,"speedAuto":{"rateLock":true}}"#
+        let speed = try JSONDecoder.laMarzocco().decode(GrinderSpeed.self, from: Data(json.utf8))
+        XCTAssertNil(speed.speedAuto)
+        XCTAssertTrue(speed.speedAutoSupported)
+    }
+
     // MARK: - Offline "husk" dashboard
 
     /// When a machine drops off the cloud (switched off / lost Wi-Fi), the

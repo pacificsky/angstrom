@@ -17,10 +17,35 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(settings.gatewayFirmware?.buildVersion.isEmpty ?? true)
     }
 
+    /// Port of upstream's `test_grinder_schedule_auto_stand_by_object` (v2.5.4).
+    func testGrinderScheduleAutoStandByObject() throws {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try Fixture.data("schedule")) as? [String: Any])
+        root["autoStandBySupported"] = true
+        root["autoStandBy"] = ["standByMinutes": 15, "standByMinutesMin": 1, "standByMinutesMax": 60,
+                               "standByMinutesStep": 1, "enabled": true]
+        let schedule = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: JSONSerialization.data(withJSONObject: root))
+        let expected = AutoStandBySettings(enabled: true, standByMinutes: 15, standByMinutesMin: 1,
+                                           standByMinutesMax: 60, standByMinutesStep: 1)
+        XCTAssertEqual(schedule.autoStandBy, .settings(expected))
+        XCTAssertNil(schedule.autoStandBy?.modeString)
+
+        // Optimistic update touches only the object form.
+        XCTAssertEqual(schedule.settingAutoStandbyMinutes(30).autoStandBy?.settings?.standByMinutes, 30)
+        let machine = try JSONDecoder.laMarzocco().decode(MachineSchedule.self, from: try Fixture.data("schedule"))
+        XCTAssertEqual(machine.settingAutoStandbyMinutes(30).autoStandBy, .mode("00:30"))
+
+        // Round-trips (snapshot path).
+        let restored = try JSONDecoder.laMarzocco().decode(
+            MachineSchedule.self, from: JSONEncoder.laMarzocco().encode(schedule))
+        XCTAssertEqual(restored.autoStandBy, schedule.autoStandBy)
+    }
+
     func testScheduleDecode() throws {
         let schedule = try JSONDecoder.laMarzocco().decode(
             MachineSchedule.self, from: try Fixture.data("schedule"))
-        XCTAssertEqual(schedule.autoStandBy, "00:30")
+        XCTAssertEqual(schedule.autoStandBy, .mode("00:30"))
+        XCTAssertEqual(schedule.autoStandBy?.modeString, "00:30")
         XCTAssertEqual(schedule.autoOnOff, .mode("00:30"))
         XCTAssertEqual(schedule.autoOnOff?.modeString, "00:30")
         XCTAssertFalse(schedule.wakeUpSchedules.isEmpty)

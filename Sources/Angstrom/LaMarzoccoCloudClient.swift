@@ -194,6 +194,24 @@ public actor LaMarzoccoCloudClient {
         return .unknown
     }
 
+    // MARK: - User
+
+    /// Accept La Marzocco's latest privacy policy (`PUT /users/policy`), as the
+    /// official app does. Call this when a request fails with
+    /// ``LaMarzoccoError/policyAcceptanceRequired``. The optional profiling and
+    /// commercial consents are sent alongside, and both default to `false`
+    /// (pylamarzocco v2.5.3 `accept_privacy_policy`). The response body, which may
+    /// be empty, is ignored.
+    public func acceptPrivacyPolicy(profilePolicy: Bool = false, commercialPolicy: Bool = false) async throws {
+        _ = try await authedJSON(path: "/users/policy", method: "PUT",
+                                 body: PolicyBody(profilePolicy: profilePolicy, commercialPolicy: commercialPolicy))
+    }
+
+    private struct PolicyBody: Encodable, Sendable {
+        let profilePolicy: Bool
+        let commercialPolicy: Bool
+    }
+
     // MARK: - Auth
 
     /// Register this installation's public key with the server (one-time).
@@ -286,13 +304,18 @@ public actor LaMarzoccoCloudClient {
     func authed(path: String, method: String, bodyData: Data? = nil) async throws -> Data {
         let bearer = try await accessToken()
         do {
-            return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData))
-        } catch LaMarzoccoError.authenticationFailed {
+            return try await send(authedRequest(path: path, method: method, bearer: bearer, bodyData: bodyData),
+                                  distinguishing401: true)
+        } catch is Unauthorized401 {
             // Token rejected mid-flight. Invalidate it (unless another fetch has
             // already replaced it) and retry once with a fresh token. This is
             // deliberately more forgiving than pylamarzocco, which surfaces the
             // 401 immediately: a 401 means the request was *not* applied, so even
-            // a non-idempotent command POST is safe to re-send once.
+            // a non-idempotent command POST is safe to re-send once. Only a 401
+            // retries. A 403 (``LaMarzoccoError/authenticationFailed`` or
+            // ``LaMarzoccoError/policyAcceptanceRequired``) surfaces at once, as
+            // upstream does. A fresh token won't help a forbidden request, and
+            // a retry would re-send it after a password sign-in.
             if token?.accessToken == bearer { token = nil }
             let retry = try await accessToken()
             return try await send(authedRequest(path: path, method: method, bearer: retry, bodyData: bodyData))
@@ -352,8 +375,13 @@ public actor LaMarzoccoCloudClient {
         return confirmation
     }
 
+    /// Thrown by ``send(_:distinguishing401:)`` in place of
+    /// ``LaMarzoccoError/authenticationFailed`` for a 401 when the caller asks,
+    /// so ``authed(path:method:bodyData:)`` can retry 401s (and only 401s).
+    private struct Unauthorized401: Error {}
+
     @discardableResult
-    private func send(_ request: URLRequest) async throws -> Data {
+    private func send(_ request: URLRequest, distinguishing401: Bool = false) async throws -> Data {
         log?("\(request.httpMethod ?? "?") \(request.url?.path ?? "")")
         let data: Data
         let response: URLResponse
@@ -369,11 +397,27 @@ public actor LaMarzoccoCloudClient {
         case 200...299:
             return data
         case 401:
+            if distinguishing401 { throw Unauthorized401() }
             throw LaMarzoccoError.authenticationFailed
+        case 403:
+            // pylamarzocco (v2.5.3+): a policy-acceptance 403 gets its own error;
+            // any other 403 is an auth failure. One helper serves every request
+            // (auth/init, sign-in, refresh, REST), as upstream's `_request` does.
+            throw Self.forbiddenError(body: data)
         default:
             let body = String(data: data, encoding: .utf8) ?? ""
             throw LaMarzoccoError.requestFailed(status: http.statusCode, body: String(body.prefix(300)))
         }
+    }
+
+    /// Map a 403 body to ``LaMarzoccoError``: `{"code":"USER_MUST_ACCEPT_POLICY"}`
+    /// → ``LaMarzoccoError/policyAcceptanceRequired``, anything else (including
+    /// a non-JSON body) → ``LaMarzoccoError/authenticationFailed``.
+    static func forbiddenError(body: Data) -> LaMarzoccoError {
+        let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        return object?["code"] as? String == "USER_MUST_ACCEPT_POLICY"
+            ? .policyAcceptanceRequired
+            : .authenticationFailed
     }
 
     private func url(_ path: String) -> URL {

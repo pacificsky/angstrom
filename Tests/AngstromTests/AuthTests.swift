@@ -210,4 +210,86 @@ final class AuthTests: XCTestCase {
             // expected after the single retry also 401s
         }
     }
+
+    // MARK: - 403 handling (pylamarzocco v2.5.3)
+
+    func testForbiddenErrorMapping() {
+        XCTAssertEqual(LaMarzoccoCloudClient.forbiddenError(body: Data(#"{"code":"USER_MUST_ACCEPT_POLICY"}"#.utf8)),
+                       .policyAcceptanceRequired)
+        XCTAssertEqual(LaMarzoccoCloudClient.forbiddenError(body: Data(#"{"code":"SOMETHING_ELSE"}"#.utf8)),
+                       .authenticationFailed)
+        XCTAssertEqual(LaMarzoccoCloudClient.forbiddenError(body: Data("<html>nope</html>".utf8)),
+                       .authenticationFailed, "non-JSON 403 is an auth failure")
+        XCTAssertEqual(LaMarzoccoCloudClient.forbiddenError(body: Data(#"["code"]"#.utf8)),
+                       .authenticationFailed, "non-object JSON is an auth failure")
+    }
+
+    func testPolicyRequiredOnRequestSurfacesWithoutRetry() async throws {
+        let backend = MockBackend()
+        backend.onRequest { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/auth/init") { return .json([:]) }
+            if path.hasSuffix("/auth/signin") { return .json(["accessToken": "a1", "refreshToken": "r1"]) }
+            return .json(["code": "USER_MUST_ACCEPT_POLICY"], status: 403)
+        }
+        let client = makeClient(backend: backend)
+        do {
+            _ = try await client.machines()
+            XCTFail("expected policyAcceptanceRequired")
+        } catch LaMarzoccoError.policyAcceptanceRequired {
+            XCTAssertEqual(backend.count(pathSuffix: "/things"), 1, "a policy 403 isn't retried")
+        }
+    }
+
+    func testPolicyRequiredOnSignInSurfaces() async throws {
+        // Upstream v2.5.5 routes auth calls through the same 403 mapping.
+        let backend = MockBackend()
+        backend.onRequest { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/auth/init") { return .json([:]) }
+            if path.hasSuffix("/auth/signin") { return .json(["code": "USER_MUST_ACCEPT_POLICY"], status: 403) }
+            return MockBackend.Reply(status: 404)
+        }
+        do {
+            _ = try await makeClient(backend: backend).machines()
+            XCTFail("expected policyAcceptanceRequired")
+        } catch LaMarzoccoError.policyAcceptanceRequired {}
+    }
+
+    func testOtherForbiddenIsAuthFailureWithoutRetry() async throws {
+        let backend = MockBackend()
+        backend.onRequest { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/auth/init") { return .json([:]) }
+            if path.hasSuffix("/auth/signin") { return .json(["accessToken": "a1", "refreshToken": "r1"]) }
+            return .json(["code": "FORBIDDEN"], status: 403)
+        }
+        do {
+            _ = try await makeClient(backend: backend).machines()
+            XCTFail("expected authenticationFailed")
+        } catch LaMarzoccoError.authenticationFailed {
+            // Unlike a 401, a 403 isn't retried: no token reset, no extra
+            // password sign-in, no duplicate request (upstream never retries).
+            XCTAssertEqual(backend.count(pathSuffix: "/things"), 1)
+            XCTAssertEqual(backend.count(pathSuffix: "/auth/signin"), 1)
+        }
+    }
+
+    func testAcceptPrivacyPolicySendsConsentsAndToleratesEmptyBody() async throws {
+        let backend = MockBackend()
+        backend.onRequest { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/auth/init") { return .json([:]) }
+            if path.hasSuffix("/auth/signin") { return .json(["accessToken": "a1", "refreshToken": "r1"]) }
+            if path.hasSuffix("/users/policy") { return MockBackend.Reply(status: 200) } // empty body
+            return MockBackend.Reply(status: 404)
+        }
+        let client = makeClient(backend: backend)
+        try await client.acceptPrivacyPolicy(profilePolicy: true)
+
+        XCTAssertEqual(backend.method(pathSuffix: "/users/policy"), "PUT")
+        let body = try XCTUnwrap(backend.body(pathSuffix: "/users/policy"))
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: body) as? NSDictionary,
+                       ["profilePolicy": true, "commercialPolicy": false] as NSDictionary)
+    }
 }

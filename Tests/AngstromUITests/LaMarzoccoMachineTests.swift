@@ -228,6 +228,94 @@ final class LaMarzoccoMachineTests: XCTestCase {
         XCTAssertEqual(machine.dashboard?.grinderGrindWith?.mode, .portafilter)
     }
 
+    /// v2.5.4: a dose with a speed level sends the speed as its own command
+    /// first, then the dose (whose payload no longer carries `speedLevel`).
+    func testSwanDoseWithSpeedSendsSpeedThenDose() async throws {
+        let backend = try backend(dashboardFixture: "dashboard_swan")
+        let machine = LaMarzoccoMachine(serialNumber: "SG123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+
+        try await machine.setGrinderDose(doseIndex: .doseB, dose: 10.0, speedLevel: .medium)
+
+        let commands = backend.recordedPaths.filter { $0.contains("/command/") }
+            .compactMap { $0.components(separatedBy: "/").last }
+        XCTAssertEqual(commands, ["GrinderSettingSpeedForDose", "GrinderSettingDose"])
+        let dose = try XCTUnwrap(backend.body(pathSuffix: "/command/GrinderSettingDose"))
+        XCTAssertNil((try JSONSerialization.jsonObject(with: dose) as? [String: Any])?["speedLevel"])
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseB"]?.level, .medium)
+    }
+
+    func testSwanV254CommandsApplyOptimistically() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_swan", serial: "SG123456")
+        try await machine.refreshDashboard()
+
+        try await machine.setGrinderSpeed(doseIndex: .doseA, level: .high)
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseA"]?.level, .high)
+
+        try await machine.setGrinderAutoSpeed(doseIndex: .doseA, enabled: true, groupIndex: 2)
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseA"]?.autoEnabled, true)
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseA"]?.groupIndex, 2)
+        XCTAssertEqual(machine.dashboard?.grinderSpeed?.doses["DoseA"]?.level, .high, "level kept")
+
+        // The capture has `speedAuto: null`, so the reference update is a no-op
+        // locally (upstream also only patches an existing reference).
+        try await machine.setGrinderAutoSpeedReference(doseMode: .mass, extractionSeconds: 28, doseMass: 36)
+        XCTAssertNil(machine.dashboard?.grinderSpeed?.speedAuto)
+        XCTAssertNil(machine.lastError)
+    }
+
+    func testAutoSpeedReferenceOptimisticReplacesSettableFields() {
+        let auto = GrinderSpeedAuto(doseMode: .pulses, availableDoseModes: [.mass, .pulses],
+                                    extractionSeconds: 25, extractionSecondsMin: 15,
+                                    doseMass: 18, doseMassMax: 40, dosePulses: 7, rateLock: true)
+        let dashboard = Dashboard(machine: Machine(serialNumber: "SG1"), widgets: [
+            Widget(code: "GSpeed", index: 1, kind: .grinderSpeed(GrinderSpeed(doses: [:], speedAutoSupported: true, speedAuto: auto))),
+        ])
+        let next = dashboard.settingGrinderAutoSpeedReference(
+            doseMode: .mass, extractionSeconds: 30, doseMass: 36, dosePulses: nil, rateLock: false)
+        let updated = next.grinderSpeed?.speedAuto
+        XCTAssertEqual(updated?.doseMode, .mass)
+        XCTAssertEqual(updated?.extractionSeconds, 30)
+        XCTAssertEqual(updated?.doseMass, 36)
+        XCTAssertNil(updated?.dosePulses, "nil is applied, as upstream assigns it")
+        XCTAssertEqual(updated?.rateLock, false)
+        XCTAssertEqual(updated?.extractionSecondsMin, 15, "ranges kept")
+        XCTAssertEqual(updated?.doseMassMax, 40)
+        XCTAssertEqual(updated?.availableDoseModes, [.mass, .pulses])
+    }
+
+    func testSingleDoseAndMirrorDosesOptimistic() async throws {
+        let machine = try machine(dashboardFixture: "dashboard_pico", serial: "GR123456")
+        try await machine.refreshDashboard()
+        let before = try XCTUnwrap(machine.dashboard?.grinderSingleDose?.enabled)
+        try await machine.setGrinderSingleDoseMode(on: !before)
+        XCTAssertEqual(machine.dashboard?.grinderSingleDose?.enabled, !before)
+
+        // No GMirrorDoses widget on the Pico: the command is sent, state untouched.
+        try await machine.setGrinderMirrorDoses(on: true)
+        XCTAssertNil(machine.dashboard?.grinderMirrorDoses)
+        XCTAssertNil(machine.lastError)
+
+        let mirrored = Dashboard(machine: Machine(serialNumber: "G"), widgets: [
+            Widget(code: "GMirrorDoses", index: 1, kind: .grinderMirrorDoses(GrinderMirrorDoses(enabled: false))),
+        ]).settingGrinderMirrorDoses(true)
+        XCTAssertEqual(mirrored.grinderMirrorDoses?.enabled, true)
+    }
+
+    /// Upstream's `set_smart_standby` is coffee-machine only, so on a grinder it
+    /// must not send `CoffeeMachineSettingAutoStandBy`.
+    func testSmartStandbyThrowsOnGrinderWithoutSending() async throws {
+        let backend = try backend(dashboardFixture: "dashboard_swan")
+        let machine = LaMarzoccoMachine(serialNumber: "SG123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setSmartStandby(enabled: true, minutes: 10, after: .lastBrewing)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        XCTAssertEqual(backend.recordedPaths.filter { $0.contains("/command/") }, [])
+        XCTAssertNotNil(machine.lastError)
+    }
+
     /// Swan-only grinder commands throw on the Pico.
     func testSwanCommandsThrowOnPico() async throws {
         let machine = try machine(dashboardFixture: "dashboard_pico", serial: "GR123456")
@@ -240,6 +328,35 @@ final class LaMarzoccoMachineTests: XCTestCase {
             _ = try await machine.setGrinderMoreDose(revolutions: 1)
             XCTFail("expected unsupportedModel")
         } catch LaMarzoccoError.unsupportedModel {}
+        do {
+            _ = try await machine.setGrinderSpeed(doseIndex: .doseA, level: .high)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        do {
+            _ = try await machine.setGrinderAutoSpeed(doseIndex: .doseA, enabled: true)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        do {
+            _ = try await machine.setGrinderAutoSpeedReference(doseMode: .mass)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+    }
+
+    /// The speed command is Swan-gated, so a dose *with* a speed level throws
+    /// on the Pico before anything is sent (upstream `set_speed` raises).
+    func testPicoDoseWithSpeedThrowsWithoutSending() async throws {
+        let backend = try backend(dashboardFixture: "dashboard_pico")
+        let machine = LaMarzoccoMachine(serialNumber: "GR123456", client: makeClient(backend))
+        try await machine.refreshDashboard()
+        do {
+            _ = try await machine.setGrinderDose(doseIndex: .doseA, dose: 9, speedLevel: .low)
+            XCTFail("expected unsupportedModel")
+        } catch LaMarzoccoError.unsupportedModel {}
+        XCTAssertEqual(backend.count(pathSuffix: "/command/GrinderSettingDose"), 0)
+
+        // Without a speed level the dose itself is ungated, as upstream.
+        try await machine.setGrinderDose(doseIndex: .doseA, dose: 9)
+        XCTAssertEqual(backend.count(pathSuffix: "/command/GrinderSettingDose"), 1)
     }
 
     // MARK: - Refresh

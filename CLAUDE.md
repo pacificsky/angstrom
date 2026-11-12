@@ -118,7 +118,7 @@ headers, and masks `bleAuthToken` and the STOMP bearer token in printed output. 
 
 ## Status
 
-v1.6.0 — full cloud parity with `pylamarzocco` v2.5.2 (Bluetooth excluded): auth + token refresh,
+v1.7.0 — full cloud parity with `pylamarzocco` v2.5.6 (Bluetooth excluded): auth + token refresh,
 typed dashboard/settings/scheduling reads, the command surface with two-tier websocket
 confirmation, live updates, statistics, grinder support, and the optional `AngstromUI`
 observable device layer, plus the `angcli` wire-debugging tool, a porting-watermark +
@@ -145,4 +145,10 @@ class, so it stays `.unknown(code:)` here until a real payload is captured (see
 UPSTREAM.md). v1.6.0 ports upstream v2.5.2, which is mostly Bluetooth (shot counter,
 telemetry): the cloud remainder is `MachineState`/`BoilerStatus.eco` (source-breaking for exhaustive switches),
 `Machine.shotCounterSupported`, and — mirroring upstream's log masking — `angcli` now
-redacts `bleAuthToken` (and the STOMP `CONNECT` bearer token) in `dump`/`listen` output. Bluetooth remains out of scope.
+redacts `bleAuthToken` (and the STOMP `CONNECT` bearer token) in `dump`/`listen` output.
+v1.7.0 ports upstream v2.5.6: 403 handling (`USER_MUST_ACCEPT_POLICY` →
+`LaMarzoccoError.policyAcceptanceRequired`, any other 403 → `.authenticationFailed`) plus
+`acceptPrivacyPolicy`, `CommandStatus.failed`, and the extended grinder surface (index-free
+payloads, a separate speed command, single-dose/mirror/auto-speed/auto-standby commands,
+`GrinderStatus`, typed `speedAuto`, `GMirrorDoses`/`GHopperOpened`, the `AutoStandBy`
+schedule union). Bluetooth remains out of scope.

@@ -249,6 +249,24 @@ final class WebSocketTests: XCTestCase {
         }
     }
 
+    /// pylamarzocco #170 (v2.5.5): a `Failed` status used to break upstream's
+    /// whole push parse, so the caller waited out the timeout. Here it surfaces
+    /// immediately as a rejection.
+    func testCommandFailedStatusRejectsPromptly() async throws {
+        let channel = MockWebSocketChannel()
+        let client = try await connect(authBackend(), channel)
+
+        async let result: CommandResponse = client.setPower(serial: "SN1", on: true)
+        await pushUntilResolved(channel, messageFrame(#"{"commands":[{"id":"cmd1","status":"Failed","errorCode":"E9"}]}"#))
+        do {
+            _ = try await result
+            XCTFail("expected commandFailed")
+        } catch LaMarzoccoError.commandFailed(let status, let code) {
+            XCTAssertEqual(status, "Failed")
+            XCTAssertEqual(code, "E9")
+        }
+    }
+
     func testFireAndForgetWhenNotConnected() async throws {
         // No websocket → the command returns its immediate ack without blocking.
         let backend = authBackend()

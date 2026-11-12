@@ -14,6 +14,8 @@ public struct CommandResponse: Sendable, Hashable, Codable {
 public enum CommandStatus: Sendable, Hashable, Codable {
     case success
     case error
+    /// The machine rejected the command (pylamarzocco v2.5.5).
+    case failed
     case timeout
     case pending
     case inProgress
@@ -23,6 +25,7 @@ public enum CommandStatus: Sendable, Hashable, Codable {
         switch rawValue {
         case "Success": self = .success
         case "Error": self = .error
+        case "Failed": self = .failed
         case "Timeout": self = .timeout
         case "Pending": self = .pending
         case "InProgress": self = .inProgress
@@ -33,6 +36,7 @@ public enum CommandStatus: Sendable, Hashable, Codable {
         switch self {
         case .success: "Success"
         case .error: "Error"
+        case .failed: "Failed"
         case .timeout: "Timeout"
         case .pending: "Pending"
         case .inProgress: "InProgress"
@@ -98,7 +102,6 @@ private struct BoilerEnabledBody: Encodable, Sendable { let boilerIndex: Int; le
 private struct BoilerLevelBody: Encodable, Sendable { let boilerIndex: Int; let targetLevel: SteamLevel }
 private struct BoilerTemperatureBody: Encodable, Sendable { let boilerIndex: Int; let targetTemperature: Double }
 private struct SmartStandbyBody: Encodable, Sendable { let enabled: Bool; let minutes: Int; let after: String }
-private struct GrinderLightBody: Encodable, Sendable { let index: Int; let enabled: Bool }
 private struct GroupModeBody: Encodable, Sendable { let groupIndex: Int; let mode: String }
 private struct RinseFlushTimeBody: Encodable, Sendable { let timeSeconds: Double }
 private struct HotWaterDoseBody: Encodable, Sendable { let doseIndex: String; let dose: Double }
@@ -107,14 +110,30 @@ private struct BrewingPressureBody: Encodable, Sendable { let groupIndex: Int; l
 private struct ContinuousDoseEnabledBody: Encodable, Sendable { let groupIndex: Int; let rinseEnabled: Bool }
 private struct ContinuousDoseBody: Encodable, Sendable { let groupIndex: Int; let rinseSeconds: Double }
 private struct MirrorGroupBody: Encodable, Sendable { let groupIndex: Int; let enabled: Bool }
-private struct IndexedModeBody: Encodable, Sendable { let index: Int; let mode: String }
-private struct GrinderDoseBody: Encodable, Sendable {
-    let index: Int; let mode: String; let doseIndex: String; let dose: Double
-    /// Omitted from the JSON when nil, matching pylamarzocco (the key is only
-    /// added when a speed level is supplied).
-    let speedLevel: String?
+private struct GrinderDoseBody: Encodable, Sendable { let mode: String; let doseIndex: String; let dose: Double }
+private struct GrinderMoreDoseBody: Encodable, Sendable { let revolutions: Double }
+private struct GrinderSpeedBody: Encodable, Sendable { let doseIndex: String; let speedLevel: String }
+private struct GrinderAutoSpeedEnabledBody: Encodable, Sendable { let doseIndex: String; let groupIndex: Int; let enabled: Bool }
+private struct GrinderAutoStandbyBody: Encodable, Sendable { let standByMinutes: Int }
+/// Encodes nil fields as explicit `null`s, matching pylamarzocco's payload.
+private struct GrinderAutoSpeedReferenceBody: Encodable, Sendable {
+    let doseMode: String
+    let extractionSeconds: Double?
+    let doseMass: Double?
+    let dosePulses: Double?
+    let rateLock: Bool
+
+    private enum CodingKeys: String, CodingKey { case doseMode, extractionSeconds, doseMass, dosePulses, rateLock }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(doseMode, forKey: .doseMode)
+        for (value, key) in [(extractionSeconds, CodingKeys.extractionSeconds), (doseMass, .doseMass), (dosePulses, .dosePulses)] {
+            if let value { try c.encode(value, forKey: key) } else { try c.encodeNil(forKey: key) }
+        }
+        try c.encode(rateLock, forKey: .rateLock)
+    }
 }
-private struct GrinderMoreDoseBody: Encodable, Sendable { let index: Int; let revolutions: Double }
 
 private struct PreExtractionTimesBody: Encodable, Sendable {
     struct Seconds: Encodable, Sendable {
@@ -388,35 +407,114 @@ extension LaMarzoccoCloudClient {
 
     /// Enable or disable a grinder's barista light (ignored while in standby).
     @discardableResult
-    public func setGrinderBaristaLight(serial: String, on: Bool, index: Int = 1) async throws -> CommandResponse {
+    public func setGrinderBaristaLight(serial: String, on: Bool) async throws -> CommandResponse {
         try await executeCommand(serial: serial, "GrinderSettingBaristaLightEnabled",
-                                 body: GrinderLightBody(index: index, enabled: on))
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Deprecated: the cloud takes no index for grinder settings
+    /// (pylamarzocco v2.5.4 dropped it from every grinder payload).
+    @available(*, deprecated, message: "Grinder commands take no index; use setGrinderBaristaLight(serial:on:)")
+    @discardableResult
+    public func setGrinderBaristaLight(serial: String, on: Bool, index: Int) async throws -> CommandResponse {
+        try await setGrinderBaristaLight(serial: serial, on: on)
     }
 
     /// Set the grind-with mode (Swan).
     @discardableResult
     public func setGrinderGrindWith(serial: String, _ mode: GrinderGrindWithMode) async throws -> CommandResponse {
         try await executeCommand(serial: serial, "GrinderSettingGrindWithMode",
-                                 body: IndexedModeBody(index: 1, mode: mode.rawValue))
+                                 body: ModeBody(mode: mode.rawValue))
     }
 
-    /// Set the dose, and optionally the speed level, of a grinder dose.
+    /// Set a grinder dose. The speed level is a separate command:
+    /// ``setGrinderSpeed(serial:doseIndex:speedLevel:)``.
+    @discardableResult
+    public func setGrinderDose(
+        serial: String, doseIndex: DoseIndex, dose: Double, mode: GrinderDoseMode
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingDose",
+                                 body: GrinderDoseBody(mode: mode.rawValue, doseIndex: doseIndex.rawValue, dose: dose))
+    }
+
+    /// Deprecated: the speed level now has its own command, as in the official
+    /// app (pylamarzocco v2.5.4). With a `speedLevel` this sends
+    /// ``setGrinderSpeed(serial:doseIndex:speedLevel:)`` first, then the dose,
+    /// and returns the dose command's response.
+    @available(*, deprecated, message: "Use setGrinderSpeed(serial:doseIndex:speedLevel:) and setGrinderDose(serial:doseIndex:dose:mode:)")
     @discardableResult
     public func setGrinderDose(
         serial: String, doseIndex: DoseIndex, dose: Double,
-        mode: GrinderDoseMode, speedLevel: GrinderSpeedLevel? = nil
+        mode: GrinderDoseMode, speedLevel: GrinderSpeedLevel?
     ) async throws -> CommandResponse {
-        try await executeCommand(serial: serial, "GrinderSettingDose",
-                                 body: GrinderDoseBody(index: 1, mode: mode.rawValue,
-                                                       doseIndex: doseIndex.rawValue, dose: dose,
-                                                       speedLevel: speedLevel?.rawValue))
+        if let speedLevel {
+            try await setGrinderSpeed(serial: serial, doseIndex: doseIndex, speedLevel: speedLevel)
+        }
+        return try await setGrinderDose(serial: serial, doseIndex: doseIndex, dose: dose, mode: mode)
     }
 
     /// Set the additional "more dose" revolutions of a grinder (Swan).
     @discardableResult
     public func setGrinderMoreDose(serial: String, revolutions: Double) async throws -> CommandResponse {
         try await executeCommand(serial: serial, "GrinderSettingMoreDose",
-                                 body: GrinderMoreDoseBody(index: 1, revolutions: revolutions))
+                                 body: GrinderMoreDoseBody(revolutions: revolutions))
+    }
+
+    /// Enable or disable a grinder's single-dose mode.
+    @discardableResult
+    public func setGrinderSingleDoseMode(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingSingleDoseModeEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Enable or disable mirroring a grinder's doses.
+    @discardableResult
+    public func setGrinderMirrorDoses(serial: String, on: Bool) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingMirrorDosesEnabled",
+                                 body: EnabledBody(enabled: on))
+    }
+
+    /// Set the motor speed level of a grinder dose (Swan).
+    @discardableResult
+    public func setGrinderSpeed(
+        serial: String, doseIndex: DoseIndex, speedLevel: GrinderSpeedLevel
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingSpeedForDose",
+                                 body: GrinderSpeedBody(doseIndex: doseIndex.rawValue, speedLevel: speedLevel.rawValue))
+    }
+
+    /// Enable or disable automatic speed for a grinder dose (Swan). The
+    /// automatic speed follows the extraction of `groupIndex` on the coffee
+    /// machine in the same coffee station.
+    @discardableResult
+    public func setGrinderAutoSpeedEnabled(
+        serial: String, doseIndex: DoseIndex, enabled: Bool, groupIndex: Int = 1
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingAutoSpeedDoseEnabled",
+                                 body: GrinderAutoSpeedEnabledBody(doseIndex: doseIndex.rawValue,
+                                                                   groupIndex: groupIndex, enabled: enabled))
+    }
+
+    /// Set the reference extraction the automatic grinder speed adapts to
+    /// (Swan). `doseMode` is `.mass` (with `doseMass` in grams) or `.pulses`
+    /// (with `dosePulses`). `rateLock` keeps the reference flow rate. Nil
+    /// values are sent as explicit JSON `null`s, as upstream does.
+    @discardableResult
+    public func setGrinderAutoSpeedReference(
+        serial: String, doseMode: DoseMode, extractionSeconds: Double? = nil,
+        doseMass: Double? = nil, dosePulses: Double? = nil, rateLock: Bool = false
+    ) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingAutoSpeedDose",
+                                 body: GrinderAutoSpeedReferenceBody(
+                                     doseMode: doseMode.rawValue, extractionSeconds: extractionSeconds,
+                                     doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock))
+    }
+
+    /// Set the minutes of inactivity after which a grinder goes to standby.
+    @discardableResult
+    public func setGrinderAutoStandby(serial: String, minutes: Int) async throws -> CommandResponse {
+        try await executeCommand(serial: serial, "GrinderSettingAutoStandBy",
+                                 body: GrinderAutoStandbyBody(standByMinutes: minutes))
     }
 
     // MARK: Firmware

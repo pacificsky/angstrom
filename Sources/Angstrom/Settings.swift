@@ -98,7 +98,9 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
     /// lives in ``smartWakeUpSleep``).
     public let smartStandby: SmartStandby?
     public let smartStandbySupported: Bool
-    public let autoStandBy: String?
+    /// Auto standby: a mode string on machines, a settings object on grinders
+    /// (pylamarzocco v2.5.4's `AutoStandBy | str | None`).
+    public let autoStandBy: AutoStandBy?
     public let autoStandBySupported: Bool
     /// Auto on/off configuration. Most machines send a mode string
     /// (`"HH:MM"`/`"Off"`); the Strada X sends a settings object — mirroring
@@ -118,6 +120,41 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         case ecoMode, ecoModeSupported
     }
 
+    init(machine: Machine, smartWakeUpSleep: SmartWakeUpSleep, smartWakeUpSleepSupported: Bool,
+         smartStandby: SmartStandby?, smartStandbySupported: Bool,
+         autoStandBy: AutoStandBy?, autoStandBySupported: Bool,
+         autoOnOff: AutoOnOff?, autoOnOffSupported: Bool,
+         ecoMode: EcoMode?, ecoModeSupported: Bool) {
+        self.machine = machine
+        self.smartWakeUpSleep = smartWakeUpSleep
+        self.smartWakeUpSleepSupported = smartWakeUpSleepSupported
+        self.smartStandby = smartStandby
+        self.smartStandbySupported = smartStandbySupported
+        self.autoStandBy = autoStandBy
+        self.autoStandBySupported = autoStandBySupported
+        self.autoOnOff = autoOnOff
+        self.autoOnOffSupported = autoOnOffSupported
+        self.ecoMode = ecoMode
+        self.ecoModeSupported = ecoModeSupported
+    }
+
+    /// Optimistically set a grinder's auto-standby minutes (after
+    /// `setGrinderAutoStandby`). As upstream does, this only touches the
+    /// grinder object form; a machine's mode string is left as is.
+    public func settingAutoStandbyMinutes(_ minutes: Int) -> MachineSchedule {
+        guard case .settings(let current) = autoStandBy else { return self }
+        let next = AutoStandBySettings(enabled: current.enabled, standByMinutes: minutes,
+                                       standByMinutesMin: current.standByMinutesMin,
+                                       standByMinutesMax: current.standByMinutesMax,
+                                       standByMinutesStep: current.standByMinutesStep)
+        return MachineSchedule(machine: machine, smartWakeUpSleep: smartWakeUpSleep,
+                               smartWakeUpSleepSupported: smartWakeUpSleepSupported,
+                               smartStandby: smartStandby, smartStandbySupported: smartStandbySupported,
+                               autoStandBy: .settings(next), autoStandBySupported: autoStandBySupported,
+                               autoOnOff: autoOnOff, autoOnOffSupported: autoOnOffSupported,
+                               ecoMode: ecoMode, ecoModeSupported: ecoModeSupported)
+    }
+
     public init(from decoder: Decoder) throws {
         machine = try Machine(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -128,7 +165,7 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         smartWakeUpSleepSupported = (try? c.decode(Bool.self, forKey: .smartWakeUpSleepSupported)) ?? true
         smartStandby = (try? c.decodeIfPresent(SmartStandby.self, forKey: .smartStandBy)) ?? nil
         smartStandbySupported = (try? c.decode(Bool.self, forKey: .smartStandBySupported)) ?? false
-        autoStandBy = (try? c.decodeIfPresent(String.self, forKey: .autoStandBy)) ?? nil
+        autoStandBy = (try? c.decodeIfPresent(AutoStandBy.self, forKey: .autoStandBy)) ?? nil
         autoStandBySupported = (try? c.decode(Bool.self, forKey: .autoStandBySupported)) ?? false
         autoOnOff = (try? c.decodeIfPresent(AutoOnOff.self, forKey: .autoOnOff)) ?? nil
         autoOnOffSupported = (try? c.decode(Bool.self, forKey: .autoOnOffSupported)) ?? false
@@ -149,6 +186,76 @@ public struct MachineSchedule: Sendable, Hashable, Codable {
         try c.encode(autoOnOffSupported, forKey: .autoOnOffSupported)
         try c.encodeIfPresent(ecoMode, forKey: .ecoMode)
         try c.encode(ecoModeSupported, forKey: .ecoModeSupported)
+    }
+}
+
+/// Auto standby, which the cloud sends in two shapes: a plain mode string on
+/// coffee machines, or an ``AutoStandBySettings`` object on grinders. Mirrors
+/// pylamarzocco's `AutoStandBy | str | None` union (v2.5.4).
+public enum AutoStandBy: Sendable, Hashable, Codable {
+    case mode(String)
+    case settings(AutoStandBySettings)
+
+    /// The mode string, when the device sent the string form (coffee machines).
+    public var modeString: String? {
+        if case .mode(let value) = self { return value }
+        return nil
+    }
+
+    /// The settings object, when the device sent the object form (grinders).
+    public var settings: AutoStandBySettings? {
+        if case .settings(let value) = self { return value }
+        return nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let string = try? c.decode(String.self) {
+            self = .mode(string)
+        } else {
+            self = .settings(try c.decode(AutoStandBySettings.self))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .mode(let value): try c.encode(value)
+        case .settings(let value): try c.encode(value)
+        }
+    }
+}
+
+/// Grinder auto-standby settings: the inactivity timeout and its allowed range.
+public struct AutoStandBySettings: Sendable, Hashable, Codable {
+    public let enabled: Bool
+    public let standByMinutes: Int?
+    public let standByMinutesMin: Int
+    public let standByMinutesMax: Int
+    public let standByMinutesStep: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, standByMinutes, standByMinutesMin, standByMinutesMax, standByMinutesStep
+    }
+
+    public init(enabled: Bool = false, standByMinutes: Int? = nil, standByMinutesMin: Int = 0,
+                standByMinutesMax: Int = 0, standByMinutesStep: Int = 1) {
+        self.enabled = enabled
+        self.standByMinutes = standByMinutes
+        self.standByMinutesMin = standByMinutesMin
+        self.standByMinutesMax = standByMinutesMax
+        self.standByMinutesStep = standByMinutesStep
+    }
+
+    /// Defaults match upstream's dataclass (enabled `false`, min/max `0`,
+    /// step `1`).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+        standByMinutes = (try? c.decodeIfPresent(Int.self, forKey: .standByMinutes)) ?? nil
+        standByMinutesMin = (try? c.decode(Int.self, forKey: .standByMinutesMin)) ?? 0
+        standByMinutesMax = (try? c.decode(Int.self, forKey: .standByMinutesMax)) ?? 0
+        standByMinutesStep = (try? c.decode(Int.self, forKey: .standByMinutesStep)) ?? 1
     }
 }
 
