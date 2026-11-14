@@ -7,7 +7,9 @@
 > **Amended 2026-11-14** (orchestrator, from the BT-W0-01 reviews): §3.10 int, double and string
 > rules; §7.1 `Placeholder.swift` row. From the BT-W0-03 reviews: §4.13 (availability stream created
 > at loop start), §6.17 (fake hooks `connectPeripheralIDs`, `connectFailure`,
-> `availabilitySubscriberCount`, `requestedTimeouts`; cancellation rule), §9.4 C51.
+> `availabilitySubscriberCount`, `requestedTimeouts`; cancellation rule), §9.4 C51. From the Wave 1
+> reviews: §3.10 int rule for `NSDecimalNumber`, §4.17 (`.unknown` widgets replaced in place; boiler
+> order wording), §4.21 (non-string token), §6.10 (`.event` direction), §10.6 (stub text).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -583,7 +585,7 @@ number as integer vs float with `CFNumberIsFloatType`.
 | **wire bool** (`hasCupWarmer`, `isEnabled`, smart-standby `enabled`) | JSON bool → itself. JSON string → `parseBool`. JSON number → `!= 0`. JSON null → `false` (parity: `bool(None)`). Array/object → `!isEmpty` (parity: `bool([])` is `False`, `bool({"a":1})` is `True`). Absent key → `.decoding` (parity: `MissingField`). | upstream `bool(v)` makes `"false"` → `True`. **D5:** Angstrom makes `"false"` → `false`. |
 | **notification bool** (`ev`, `backflush`) | JSON bool → itself. string → `parseBool`. number → `!= 0`. null/absent → `nil`. array/object → `!isEmpty` (so `{"BrewingUpdateGroup1Ev":[]}` is `ev == false`, parity). | `bool(v)`. D5 as above. |
 | **double** | JSON number → `Double`. JSON bool → `1.0`/`0.0`. JSON string → `Double(s.trimmingCharacters(in: .whitespacesAndNewlines))`; **error** if that is nil **or not finite** (`"nan"`, `"inf"`, D5), **or if `s` contains `x` or `X`** (Swift's `Double(String)` accepts hex floats such as `"0x1p3"`; Python's `float()` raises on them: parity). null/absent → `nil` (optional) or `.decoding` (required). array/object → **error**. A JSON number literal is always finite: `JSONSerialization` rejects `NaN`, `Infinity` and out-of-range literals such as `1e400`, so the whole payload fails to parse (D5). | `float(v)` (`"abc"` raises; `TBC:773`) |
-| **int** (`minutes`, `groupsNumber`, …) | JSON number `n` → if `!CFNumberIsFloatType(n)` and `Int(n.stringValue)` is non-nil → that value (exact for every integer literal in `Int` range, including `Int.max` and `Int.min`). Otherwise let `d = n.doubleValue`, `t = d.rounded(.towardZero)`: **error** unless `d.isFinite` and `-9223372036854775808.0 <= t && t < 9223372036854775808.0` (never call `Int(_:)` on a value outside that range: it traps); else `Int(t)`. JSON bool → 1/0. JSON string → `Int(s.trimmingCharacters(in: .whitespacesAndNewlines))` (optional sign and decimal digits only, else **error**). Array/object → **error**. null/absent on a required key → `.decoding`. | `int(v)`: `int(93.5) == 93`, `int("93.5")` raises. Python ints are unbounded (D5). |
+| **int** (`minutes`, `groupsNumber`, …) | JSON number `n` → if `!CFNumberIsFloatType(n)` and `Int(n.stringValue)` is non-nil → that value (exact for every integer literal in `Int` range, including `Int.max` and `Int.min`). Otherwise, if `n` is an `NSDecimalNumber` (how `JSONSerialization` returns a literal outside the 64-bit integer range), decide with its `Decimal` value, never `doubleValue`: let `t` be that value truncated toward zero (scale 0; round `.down` when it is ≥ 0, `.up` when it is negative); **error** unless `Decimal(Int.min) <= t && t <= Decimal(Int.max)`; else `Int("\(t)")` (so `-9223372036854775809` is an error, not `Int.min`). Otherwise let `d = n.doubleValue`, `t = d.rounded(.towardZero)`: **error** unless `d.isFinite` and `-9223372036854775808.0 <= t && t < 9223372036854775808.0` (never call `Int(_:)` on a value outside that range: it traps); else `Int(t)`. JSON bool → 1/0. JSON string → `Int(s.trimmingCharacters(in: .whitespacesAndNewlines))` (optional sign and decimal digits only, else **error**). Array/object → **error**. null/absent on a required key → `.decoding`. | `int(v)`: `int(93.5) == 93`, `int("93.5")` raises. Python ints are unbounded (D5). |
 | **string** | JSON string → itself. Integer number → decimal (an integer literal too large for `UInt64` arrives from `JSONSerialization` as a non-fractional `NSDecimalNumber`: emit its `stringValue` digits, never float text; parity with Python `str(int)`). Float number → `String(describing:)`. Bool → `"True"`/`"False"` (Python `str()`). **Optional** field: null/absent → `nil`. **Required** field: null → `"None"` (parity: `str(None)`), absent → `.decoding`. Array/object → its compact JSON text, `String(decoding: try JSONSerialization.data(withJSONObject: v, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)` (D5: Python gives its `repr`, e.g. `"['a']"`; only the text differs). | `str(v)` |
 
 "Error" inside a **notification** means drop the whole notification. Inside a **read response** it
@@ -1067,14 +1069,16 @@ as today (`MACH:877`).
 **`Dashboard.applyingBluetoothState(_:model:)`** (pure, core; frozen). Let `waterOK = isPlumbedIn || tankStatus`.
 `boilerStatus(enabled) = !waterOK ? .noWater : (!enabled ? .off : BoilerStatus(bluetoothMode: mode))`.
 "Existing W" means the first widget whose `code` is W **and** whose `kind` is the matching typed
-case (an `.unknown` widget counts as absent). Upsert semantics: replace in place, keeping `code`
-and `index`. If absent, **append** with `index: 1` (every cloud fixture uses `index: 1` for these
+case. Upsert semantics: replace in place, keeping `code` and `index`. An `.unknown` widget carrying
+code W (an undecodable cloud widget) is also **replaced in place**, keeping its `index`, by the typed
+widget built from the defaults below, so a code never appears twice (upstream's `config` is a dict
+keyed by code). If no widget has code W, **append** with `index: 1` (every cloud fixture uses `index: 1` for these
 codes).
 
 | Step | Widget | Default if absent | Then overwrite |
 |---|---|---|---|
 | 1 | `CMMachineStatus` | `MachineStatus(status: .standby, availableModes: [.brewing, .standby], mode: mode, nextStatus: nil, brewingStartTime: nil)` | `mode = mode`; `status = MachineState(bluetoothMode: mode)`. Keep `availableModes`, `nextStatus`, `brewingStartTime`. **Not** `CMMachineGroupStatus`. (`MACH:378-393`) |
-| 2 | for each boiler in wire order (a duplicate id: last wins; `.other` ids ignored) | | |
+| 2 | the **last** coffee entry, then the **last** steam entry (wire order only decides which duplicate wins; `.other` ids ignored) | | |
 | 2a | `id == .coffee` → `CMCoffeeBoiler` | `CoffeeBoiler(status: .standby, enabled: b.isEnabled, enabledSupported: false, targetTemperature: b.target, targetTemperatureMin: 80, targetTemperatureMax: 110, targetTemperatureStep: 0.1, readyStartTime: nil)` | `status = boilerStatus(true)` (**the coffee boiler never shows `.off`**, `MACH:413`); `enabled = b.isEnabled`; `targetTemperature = b.target` (`MACH:396-416`) |
 | 2b | `id == .steam` and `Model.steamLevelModels.contains(model)` → `CMSteamBoilerLevel` | `SteamBoilerLevel(status: .standby, enabled: b.isEnabled, enabledSupported: true, targetLevel: .level1, targetLevelSupported: true, readyStartTime: nil)` | `status = boilerStatus(b.isEnabled)`; `enabled`; `targetLevel = SteamLevel(bluetoothTargetTemperature: b.target)`. Then **remove every** `CMSteamBoilerTemperature` widget (`MACH:419-445`) |
 | 2c | `id == .steam`, other models → `CMSteamBoilerTemperature`, with `isMini = (model == .lineaMini)` | `SteamBoilerTemperature(status: .standby, enabled: b.isEnabled, enabledSupported: false, targetTemperature: b.target, targetTemperatureMin: isMini ? 95 : 20, targetTemperatureMax: isMini ? 140 : 134, targetTemperatureStep: 0.1, targetTemperatureSupported: !isMini, readyStartTime: nil)` | `status = boilerStatus(b.isEnabled)`; `enabled`; `targetTemperature = b.target`. Then **remove every** `CMSteamBoilerLevel` widget (`MACH:446-472`) |
@@ -1205,7 +1209,7 @@ has none (`MACH:870-892`).
 authenticated `GET /things`. Parse with `JSONSerialization` (the house shape-check pattern,
 `Sources/Angstrom/LaMarzoccoCloudClient.swift:178-195`): the body must be an array of objects. Find
 the first object with `serialNumber == serial`. If its `bleAuthToken` is a non-empty JSON string,
-return a token. If it is `null`, absent or `""`, return `nil`. If no object matches, throw
+return a token. If it is `null`, absent, `""` or not a JSON string (tolerant parsing), return `nil`. If no object matches, throw
 `.decoding("things: no thing with serial <serial>")`. If the shape is wrong, throw
 `.decoding("things shape")`. Never log or print the value.
 
@@ -1959,7 +1963,7 @@ public struct RawBluetoothFrame: Sendable, Hashable {
     public let kind: Kind
     /// Lowercase characteristic UUID; nil for `.event`.
     public let characteristic: String?
-    /// Verbatim bytes; for `.event`, the UTF-8 marker text.
+    /// Verbatim bytes; for `.event`, the UTF-8 marker text. (`.event` frames always carry `.inbound`.)
     public let data: Data
     /// True for the auth write and the token read: display layers MUST redact `data`.
     public let isSecret: Bool
@@ -3082,7 +3086,7 @@ target dependencies, and the `-sectcreate` linker flags from §8.4. Add `cli/Sup
 | `cli/Sources/angcli/Output.swift` | add `Redact.bluetoothFrame` + the UUID rule | C0 |
 | `cli/Sources/angcli/Ble/Ble.swift` | new parent command; `subcommands: [BleScan.self, BleGatt.self, BleToken.self, BleRead.self, BleCmd.self, BleListen.self]` | C0 (declares all six; C1 fills them in) |
 | `cli/Sources/angcli/Ble/BleSession.swift` | new: peripheral and token selection (§10.2), `BluetoothTransport.coreBluetooth()` | C0 |
-| `cli/Sources/angcli/Ble/BleScan.swift`, `BleGatt.swift`, `BleToken.swift`, `BleRead.swift`, `BleCmd.swift`, `BleListen.swift`, `BleOutput.swift` | new. C0 creates stubs that throw `CLIError("not implemented")`, and C1 implements them. | C0 → C1 |
+| `cli/Sources/angcli/Ble/BleScan.swift`, `BleGatt.swift`, `BleToken.swift`, `BleRead.swift`, `BleCmd.swift`, `BleListen.swift`, `BleOutput.swift` | new. C0 creates stubs that throw `CLIError("unimplemented: <owner id>")` (the PLAN §3.0 marker the gates grep for), and C1 implements them. | C0 → C1 |
 | `cli/Tests/angcliTests/BleTests.swift` | new: redaction, output encoding, token precedence (env/flag parsing only) | C1 |
 | `cli/SPEC.md`, `cli/README.md` | a "ble" section, TCC notes, the redaction rules | D1 |
 
