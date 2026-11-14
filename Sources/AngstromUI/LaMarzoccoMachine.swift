@@ -18,35 +18,86 @@ public final class LaMarzoccoMachine {
     /// The machine's serial number.
     public let serialNumber: String
 
-    private let client: LaMarzoccoCloudClient
+    /// The cloud client, if this machine was created with one (upstream
+    /// `LaMarzoccoThing._cloud_client`). Cloud-only operations go through
+    /// ``client``, which throws when this is `nil`.
+    let cloudClient: LaMarzoccoCloudClient?
+    /// The Bluetooth client, if this machine was created with one.
+    public let bluetooth: LaMarzoccoBluetoothClient?
+    /// Cloud client or `.cloudOnlyFunctionality` (upstream `@cloud_only`).
+    var client: LaMarzoccoCloudClient {
+        get throws {
+            guard let cloudClient else { throw LaMarzoccoError.cloudOnlyFunctionality }
+            return cloudClient
+        }
+    }
 
+    /// Rendered dashboard: `baseDashboard` + the BLE brewing overlay.
+    ///
     /// The last-known dashboard (typed widgets + identity). Updated by
     /// ``refreshDashboard()``, live websocket pushes, and optimistic command
-    /// updates.
-    public private(set) var dashboard: Dashboard?
+    /// updates. While no Bluetooth brewing update is held it equals the base
+    /// dashboard.
+    public internal(set) var dashboard: Dashboard?
+    /// Everything except the overlay; what snapshots persist.
+    var baseDashboard: Dashboard?
     /// The last-known settings (connectivity, plumb-in, firmware).
-    public private(set) var settings: MachineSettings?
+    public internal(set) var settings: MachineSettings?
     /// The last-known scheduling config (smart standby, wake-ups).
-    public private(set) var schedule: MachineSchedule?
+    public internal(set) var schedule: MachineSchedule?
     /// The last-known statistics (refreshed on demand; not part of snapshots).
-    public private(set) var statistics: ThingStatistics?
+    public internal(set) var statistics: ThingStatistics?
     /// Whether live updates are currently subscribed — i.e. between a successful
     /// ``start()`` and ``stop()``. The underlying socket may transiently drop and
     /// auto-reconnect while this stays `true`; it reflects the *subscription*, not
     /// the moment-to-moment socket connection — see ``isConnected`` for that.
-    public private(set) var isLive = false
+    public internal(set) var isLive = false
     /// Whether the live websocket is *actually* connected right now. Unlike
     /// ``isLive`` this flips `false` during silent drops and zombie-socket
     /// gaps while auto-reconnect works, so UIs can show "live" vs "stale"
     /// honestly.
-    public private(set) var isConnected = false
+    public internal(set) var isConnected = false
     /// When ``dashboard`` last changed from the cloud — a REST refresh or an
     /// applied websocket push. `nil` until the first of either. Lets UIs show
     /// "last update Nm ago" instead of trusting a stale value.
-    public private(set) var lastUpdateAt: Date?
+    public internal(set) var lastUpdateAt: Date?
     /// The most recent error from a refresh, command, or the live connection.
     /// Cleared automatically when a subsequent operation succeeds.
-    public private(set) var lastError: Error?
+    public internal(set) var lastError: Error?
+
+    // MARK: Bluetooth state
+
+    /// Whether the Bluetooth client holds an authenticated link (upstream
+    /// `bluetooth_connected`). Always `false` without a Bluetooth client.
+    public internal(set) var isBluetoothConnected: Bool = false
+    /// Whether the Bluetooth shot counter is subscribed (upstream
+    /// `bluetooth_shot_counter_active`).
+    public internal(set) var isShotCounterActive: Bool = false
+    /// The latest brewing update from the Bluetooth shot counter, overlaid on
+    /// ``dashboard`` (upstream `ble_brewing_update`).
+    public internal(set) var bluetoothBrewingUpdate: BluetoothShotCounterUpdate? = nil
+    /// The latest live values sent with the Bluetooth shot counter (upstream
+    /// `bluetooth_telemetry`).
+    public internal(set) var bluetoothTelemetry: BluetoothMachineTelemetry = BluetoothMachineTelemetry()
+    /// The duration (s) of the last shot reported over Bluetooth (upstream
+    /// `last_shot_time`).
+    public internal(set) var lastShotTime: TimeInterval? = nil
+
+    // MARK: Bluetooth plumbing
+
+    /// Iterates the Bluetooth client's shot-counter stream while it runs.
+    @ObservationIgnored var shotCounterTask: Task<Void, Never>?
+    /// Mirrors the Bluetooth client's connection events into ``isBluetoothConnected``.
+    @ObservationIgnored var bluetoothConnectionTask: Task<Void, Never>?
+    /// Clears the brewing overlay once no update arrived for ``bluetoothBrewingStateTimeout``.
+    @ObservationIgnored var brewingExpiryTask: Task<Void, Never>?
+    /// Listeners of ``bluetoothEvents()``, keyed per stream.
+    @ObservationIgnored var bluetoothEventListeners: [UUID: AsyncStream<MachineBluetoothEvent>.Continuation] = [:]
+    /// Drop the BLE brewing state when no notification arrived for this long
+    /// (upstream `BLE_BREWING_STATE_TIMEOUT = 60`).
+    @ObservationIgnored var bluetoothBrewingStateTimeout: Duration = .seconds(60)
+    /// The sleep the brewing expiry waits on (test seam).
+    @ObservationIgnored var brewingExpirySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 
     private var updateTask: Task<Void, Never>?
     /// Mirrors the client's connection events into ``isConnected`` and re-fetches
@@ -60,25 +111,74 @@ public final class LaMarzoccoMachine {
     /// teardown can't clobber state owned by a newer session.
     private var liveGeneration = 0
 
-    /// Create a machine view. Pass a previously persisted ``MachineSnapshot`` to
-    /// render stale state immediately on launch (it is adopted only if its serial
-    /// matches).
-    public init(
+    /// Create a cloud-only machine view. Pass a previously persisted
+    /// ``MachineSnapshot`` to render stale state immediately on launch (it is
+    /// adopted only if its serial matches).
+    ///
+    /// Existing signature, unchanged behaviour (cloud only); delegates to
+    /// ``init(serialNumber:client:bluetooth:snapshot:)`` with no Bluetooth client.
+    public convenience init(
         serialNumber: String,
         client: LaMarzoccoCloudClient,
         snapshot: MachineSnapshot? = nil
     ) {
+        self.init(serialNumber: serialNumber, client: client, bluetooth: nil, snapshot: snapshot)
+    }
+
+    /// Designated. Either client may be nil (upstream
+    /// `LaMarzoccoThing(serial, cloud_client, bluetooth_client)`).
+    ///
+    /// Without a cloud client, cloud-only operations throw
+    /// `LaMarzoccoError.cloudOnlyFunctionality`. With a Bluetooth client, the
+    /// machine starts observing its connection events. A ``MachineSnapshot`` is
+    /// adopted only if its serial matches.
+    public init(serialNumber: String, client: LaMarzoccoCloudClient?, bluetooth: LaMarzoccoBluetoothClient?,
+                snapshot: MachineSnapshot? = nil) {
         self.serialNumber = serialNumber
-        self.client = client
+        self.cloudClient = client
+        self.bluetooth = bluetooth
         if let snapshot, snapshot.serialNumber == serialNumber {
+            self.baseDashboard = snapshot.dashboard
             self.dashboard = snapshot.dashboard
             self.settings = snapshot.settings
             self.schedule = snapshot.schedule
         }
+        if bluetooth != nil {
+            startObservingBluetoothConnection()
+        }
     }
 
     /// Test seam: the underlying client, so tests can inject a mock websocket.
-    var clientForTesting: LaMarzoccoCloudClient { client }
+    var clientForTesting: LaMarzoccoCloudClient { cloudClient! }
+
+    /// Whether this machine was created with a cloud client (upstream
+    /// `cloud_client_available`).
+    public var hasCloudClient: Bool { cloudClient != nil }
+
+    /// Whether this machine was created with a Bluetooth client (upstream
+    /// `bluetooth_client_available`).
+    public var hasBluetoothClient: Bool { bluetooth != nil }
+
+    // MARK: - Base/overlay funnel
+
+    /// Replace the base dashboard wholesale, then re-render ``dashboard``.
+    func setBaseDashboard(_ dashboard: Dashboard?) {
+        baseDashboard = dashboard
+        renderDashboard()
+    }
+
+    /// Transform the base dashboard (if there is one), then re-render ``dashboard``.
+    func updateBaseDashboard(_ transform: (Dashboard) -> Dashboard) {
+        if let base = baseDashboard {
+            baseDashboard = transform(base)
+        }
+        renderDashboard()
+    }
+
+    /// Derive ``dashboard`` from the base dashboard and the BLE brewing overlay.
+    func renderDashboard() {
+        dashboard = bluetoothBrewingUpdate == nil ? baseDashboard : baseDashboard?.overlayingBluetoothBrewing(bluetoothBrewingUpdate)
+    }
 
     // MARK: - Derived
 
@@ -187,6 +287,7 @@ public final class LaMarzoccoMachine {
     /// Refresh dashboard, settings, and schedule concurrently.
     public func refreshAll() async throws {
         try await capturing {
+            let client = try self.client
             async let d = client.dashboard(serial: serialNumber)
             async let s = client.settings(serial: serialNumber)
             async let sc = client.schedule(serial: serialNumber)
@@ -208,6 +309,15 @@ public final class LaMarzoccoMachine {
     /// (or seeding a snapshot), early pushes are dropped until a dashboard exists.
     /// Call ``refreshDashboard()`` (or ``refreshAll()``) first.
     public func start() async throws {
+        // Upstream `@cloud_only`: without a cloud client this throws
+        // `.cloudOnlyFunctionality`, recorded in `lastError`.
+        let client: LaMarzoccoCloudClient
+        do {
+            client = try self.client
+        } catch {
+            lastError = error
+            throw error
+        }
         guard updateTask == nil, !isStarting else { return }
         isStarting = true
         liveGeneration += 1
@@ -274,7 +384,7 @@ public final class LaMarzoccoMachine {
         updateTask = nil
         connectionTask?.cancel()
         connectionTask = nil
-        await client.disconnectWebSocket()
+        await cloudClient?.disconnectWebSocket()
         isLive = false
         isConnected = false
     }
@@ -749,7 +859,7 @@ public final class LaMarzoccoMachine {
     static let groupDoseModels: Set<Model> = [.stradaX, .gs3AV]
     static let swanGrinderModels: Set<Model> = [.swan]
 
-    private func requireModel(_ supported: Set<Model>, _ what: String) throws {
+    func requireModel(_ supported: Set<Model>, _ what: String) throws {
         guard let model, supported.contains(model) else {
             let names = supported.map(\.displayName).sorted().joined(separator: ", ")
             throw LaMarzoccoError.unsupportedModel("\(what) is only supported on \(names)")
@@ -761,7 +871,7 @@ public final class LaMarzoccoMachine {
     /// Run a throwing operation, recording any failure in ``lastError`` before
     /// rethrowing so observers can surface it, and clearing ``lastError`` on
     /// success so a stale error doesn't linger in the UI.
-    private func capturing<T>(_ body: () async throws -> T) async throws -> T {
+    func capturing<T>(_ body: () async throws -> T) async throws -> T {
         do {
             let value = try await body()
             lastError = nil
