@@ -3,6 +3,10 @@ import json, os, re, sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 D = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "docs/bluetooth")
 errors = []
+import subprocess
+BASELINE = "e1bc403"  # main before the port; packages already merged must not trip the create/modify checks
+_base = set(subprocess.run(["git", "-C", ROOT, "ls-tree", "-r", "--name-only", BASELINE], capture_output=True, text=True, check=True).stdout.split("\n"))
+def at_baseline(path): return path in _base
 m = json.load(open(os.path.join(D, "work-packages.json")))                     # parses
 plan = open(os.path.join(D, "PLAN.md")).read()
 for k in ("meta", "waves", "packages", "hardwareChecklist", "releaseChecks"):
@@ -59,11 +63,11 @@ created_by = {}
 for p in sorted(m["packages"], key=lambda q: (q["wave"], q["id"])):
     for path in p["owns"]["create"]:
         if path in created_by: errors.append(f"{path} created twice")
-        if os.path.exists(os.path.join(ROOT, path)): errors.append(f"{p['id']} creates existing {path}")
+        if at_baseline(path): errors.append(f"{p['id']} creates existing {path}")
         created_by[path] = p["id"]
 for p in m["packages"]:
     for path in p["owns"]["modify"]:
-        if os.path.exists(os.path.join(ROOT, path)): continue
+        if at_baseline(path): continue
         c = created_by.get(path)
         if c is None: errors.append(f"{p['id']} modifies missing {path}")
         elif c != p["id"] and c not in R[p["id"]]: errors.append(f"{p['id']} modifies {path} created by {c} without depending on it")

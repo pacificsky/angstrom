@@ -65,7 +65,9 @@
   approves them** (see §8, approval A0). It is the only branch packages merge into, and it is
   merged to `main` as one PR at the end (approval A4).
 - **Package branches:** `bt/<id-lowercased>` (e.g. `bt/bt-w1-02`). Each one is checked out in its
-  own worktree, `.claude/worktrees/<id>` inside the repo (git-ignored). Its base is the
+  own worktree, `.claude/worktrees/<id>/angstrom` inside the repo (git-ignored; the directory must
+  be named `angstrom` because `cli/Package.swift` refers to its parent package by directory
+  name). Its base is the
   integration HEAD **at the start of the wave**. In Wave 0 (dag) and Wave 5 (serial), a package's
   base is the integration HEAD when it starts, after all of its dependencies have merged.
 - **Cleanup:** once a wave has merged into `bluetooth/integration`, every worktree of that wave
@@ -127,9 +129,9 @@ swift test
 swift build --package-path cli
 swift test --package-path cli
 # G5 — no warnings in new or changed Bluetooth code (from-scratch build in its own scratch path):
-bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
 # G5' — the same for the angcli Bluetooth files:
-bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
 # G6 — no test parked on an unfixed defect:
 bash -c '! grep -rn "BLOCKED-BY" Tests cli/Tests'
 # G7 — no stub left (final form; wave gates use the wave-scoped form):
@@ -626,7 +628,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift test
   swift build --package-path cli
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c 'cmp Tests/AngstromTestSupport/Fixtures/shot_counter_2026-10-05.txt "$UPSTREAM/tests/fixtures/machine/shot_counter_2026-10-05.txt"'
   bash -c '! grep -rnE "^(@preconcurrency )?import CoreBluetooth" Sources/Angstrom Sources/AngstromUI'
   bash -c '! grep -rn "import XCTest" Tests/AngstromTestSupport'
@@ -658,7 +660,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   ```sh
   swift build --build-tests
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -n "private let client" Sources/AngstromUI/LaMarzoccoMachine.swift'
   bash -c '! grep -rnE "^(@preconcurrency )?import CoreBluetooth" Sources/AngstromUI'
   bash -c '! grep -rhoE "unimplemented: BT-W[0-9]-[0-9]+" Sources/AngstromUI | sed "s/unimplemented: //" | sort -u | grep -vxE "BT-W3-0[6-9]"'
@@ -708,7 +710,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'FakeBluetoothTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "import XCTest" Tests/AngstromTestSupport'
   bash -c 'for f in Tests/AngstromTests/Bluetooth/BluetoothEnumsTests.swift Tests/AngstromTests/Bluetooth/BluetoothWireCoercionTests.swift Tests/AngstromTests/Bluetooth/BluetoothModelsTests.swift Tests/AngstromTests/Bluetooth/BluetoothCodecTests.swift Tests/AngstromTests/Bluetooth/BluetoothResponseDecoderTests.swift Tests/AngstromTests/Bluetooth/BrewingStateMachineTests.swift Tests/AngstromTests/Bluetooth/ShotCounterNotificationDecoderTests.swift Tests/AngstromTests/Bluetooth/DashboardBluetoothTests.swift Tests/AngstromTests/Bluetooth/BluetoothTokenTests.swift Tests/AngstromTests/Bluetooth/BluetoothOpTableTests.swift Tests/AngstromTests/Bluetooth/BluetoothClientCoreTests.swift Tests/AngstromTests/Bluetooth/BluetoothDiscoveryTests.swift Tests/AngstromTests/Bluetooth/BluetoothClientRequestsSmokeTests.swift Tests/AngstromTests/Bluetooth/BluetoothClientShotCounterSmokeTests.swift Tests/AngstromTests/Bluetooth/BluetoothConnectionTests.swift Tests/AngstromTests/Bluetooth/BluetoothAuthTests.swift Tests/AngstromTests/Bluetooth/BluetoothRequestTests.swift Tests/AngstromTests/Bluetooth/BluetoothDiagnosticsTests.swift Tests/AngstromTests/Bluetooth/ShotCounterLifecycleTests.swift Tests/AngstromTests/Bluetooth/ShotCounterNotificationTests.swift Tests/AngstromTests/Bluetooth/ShotCounterRecordedSessionTests.swift Tests/AngstromTests/Bluetooth/ShotCounterReconnectTests.swift; do test -f "$f" || { echo "missing $f"; exit 1; }; done'
   ```
@@ -741,7 +743,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothMachineHarnessTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c 'for f in Tests/AngstromUITests/Bluetooth/MachineTransportRoutingTests.swift Tests/AngstromUITests/Bluetooth/BluetoothDeviceStateTests.swift Tests/AngstromUITests/Bluetooth/BluetoothFallbackTests.swift Tests/AngstromUITests/Bluetooth/BluetoothCommandSideEffectTests.swift Tests/AngstromUITests/Bluetooth/BluetoothDashboardRefreshTests.swift Tests/AngstromUITests/Bluetooth/ShotCounterOverlayTests.swift; do test -f "$f" || { echo "missing $f"; exit 1; }; done'
   ```
 - **Risks:**
@@ -786,6 +788,9 @@ verify and integrate packages. They are spelled out in full in every manifest br
   - BluetoothWireCoercionTests.testStringFromContainerIsCompactJSON (Angstrom-only: D5c)
   - BluetoothWireCoercionTests.testIntRejectsOutOfRangeAndNonFinite (Angstrom-only: D5d)
   - BluetoothWireCoercionTests.testDoubleRejectsNonFiniteAndUnderscoreStrings (Angstrom-only: D5e, D5f)
+  - BluetoothWireCoercionTests.testIntExactAtIntBounds (Angstrom-only: §3.10 amendment)
+  - BluetoothWireCoercionTests.testDoubleRejectsHexFloatString (Angstrom-only: §3.10 amendment)
+  - BluetoothWireCoercionTests.testStringFromHugeIntegerIsDigits (Angstrom-only: §3.10 amendment)
   - BluetoothModelsTests.testBrewingMergeNeverClears
   - BluetoothModelsTests.testIsEmpty
   - BluetoothModelsTests.testTelemetryMerge
@@ -802,13 +807,13 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothEnumsTests|BluetoothWireCoercionTests|BluetoothModelsTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-01" Sources Tests cli/Sources'
   ```
 - **Risks:**
   - Python bool("false") is True upstream. Angstrom deliberately diverges (D5a). Assert the Angstrom behaviour and cite D5.
   - `Int(_:)` on a Double outside Int range traps. Range-check before converting (SPEC §3.10 int rule).
-- **Task (brief body):** Write the parity and unit tests for the leaf types that BT-W0-01 implemented, and fix those files wherever they deviate from the SPEC. You own the leaf source files only for fixes; do not change any frozen signature. BluetoothEnumsTests: the five characteristic UUIDs and every §2.2 constant, verbatim against $UPSTREAM/src/pylamarzocco/clients/_bluetooth.py:40-54; BluetoothReadSetting and BluetoothBrewingState raw values (const.py:322-339); BluetoothBoilerType raw round-trip including .other; Model(bluetoothFamily:) for every row of the §6.5 table plus whitespace and case normalisation; Model.match("GS3") still .gs3 (D8); MachineState/BoilerStatus(bluetoothMode:) for all four MachineMode cases; SteamLevel ↔ temperature both ways; a null shotCounterSupported in a Machine payload decodes as false. BluetoothWireCoercionTests: every row of the SPEC §3.10 table. Include JSON true/false versus the numbers 1/0 (the CFBoolean hazard), "false" → false for wire and notification bools (D5a), array/object truthiness for both bool rules ([] → false, {"a":1} → true), int truncation 93.5 → 93, int("93.5") fails, int from 1e300 and from 12345678901234567890 throws without trapping (D5d), float("abc") fails, "nan"/"inf" strings fail (D5e), "1_0" fails (D5f), numeric strings for doubles, str() of bool → "True"/"False", a required string that is null → "None" and absent → throws, an optional string that is null → nil, and an array/object string → its compact sorted-keys JSON text (D5c). BluetoothModelsTests: merging never clears and false/0/"" count as set; isEmpty; telemetry merge; the BluetoothShotCounterUpdate default start time; isSuccess is case-insensitive; the BluetoothJSONValue subscript; RawBluetoothFrame marker texts and mtuMarker; every §6.4 errorDescription verbatim; isBluetoothConnectionFailure for every case; BluetoothTransportError.description is non-empty for every case.
+- **Task (brief body):** Write the parity and unit tests for the leaf types that BT-W0-01 implemented, and fix those files wherever they deviate from the SPEC. You own the leaf source files only for fixes; do not change any frozen signature. SPEC §3.10 was amended after BT-W0-01 merged, so BluetoothWireCoercion.swift implements the OLD rules in three places; bring it into line and pin each with the test named below: (1) int: try the exact `Int(n.stringValue)` path first for a non-float number, so 9223372036854775807 and -9223372036854775808 decode exactly instead of throwing; (2) double: a string containing x or X (a hex float such as "0x1p3") is an error; (3) string: an integer literal too large for UInt64 (a non-fractional NSDecimalNumber) renders as its decimal digits, not float text. BluetoothEnumsTests: the five characteristic UUIDs and every §2.2 constant, verbatim against $UPSTREAM/src/pylamarzocco/clients/_bluetooth.py:40-54; BluetoothReadSetting and BluetoothBrewingState raw values (const.py:322-339); BluetoothBoilerType raw round-trip including .other; Model(bluetoothFamily:) for every row of the §6.5 table plus whitespace and case normalisation; Model(code: "GS3") is still .gs3 (Model.match is private, so test it through the public initialiser; D8); MachineState/BoilerStatus(bluetoothMode:) for all four MachineMode cases; SteamLevel ↔ temperature both ways; a null shotCounterSupported in a Machine payload decodes as false. BluetoothWireCoercionTests: every row of the SPEC §3.10 table. Include JSON true/false versus the numbers 1/0 (the CFBoolean hazard), "false" → false for wire and notification bools (D5a), array/object truthiness for both bool rules ([] → false, {"a":1} → true), int truncation 93.5 → 93, int("93.5") fails, int from 1e300 and from 12345678901234567890 throws without trapping (D5d), float("abc") fails, "nan"/"inf" strings fail (D5e), "1_0" fails (D5f), numeric strings for doubles, str() of bool → "True"/"False", a required string that is null → "None" and absent → throws, an optional string that is null → nil, and an array/object string → its compact sorted-keys JSON text (D5c). BluetoothModelsTests: merging never clears and false/0/"" count as set; isEmpty; telemetry merge; the BluetoothShotCounterUpdate default start time; isSuccess is case-insensitive; the BluetoothJSONValue subscript; RawBluetoothFrame marker texts and mtuMarker; every §6.4 errorDescription verbatim; isBluetoothConnectionFailure for every case; BluetoothTransportError.description is non-empty for every case.
 
 #### BT-W1-02 — BluetoothCodec: ordered command writer, frames, NUL handling, ensure_ascii
 
@@ -838,7 +843,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothCodecTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-02" Sources Tests cli/Sources'
   bash -c '! grep -n "JSONEncoder" Sources/Angstrom/Bluetooth/BluetoothCodec.swift'
   ```
@@ -879,7 +884,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothResponseDecoderTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-03" Sources Tests cli/Sources'
   ```
 - **Risks:**
@@ -920,7 +925,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BrewingStateMachineTests|ShotCounterNotificationDecoderTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-04" Sources Tests cli/Sources'
   ```
 - **Risks:**
@@ -959,7 +964,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'DashboardBluetoothTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-05" Sources Tests cli/Sources'
   ```
 - **Risks:**
@@ -989,7 +994,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothTokenTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-06" Sources Tests cli/Sources'
   ```
 - **Risks:**
@@ -1024,7 +1029,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothOpTableTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-07" Sources Tests cli/Sources'
   bash -c '! grep -nE "^(@preconcurrency )?import CoreBluetooth" Sources/Angstrom/Bluetooth/BluetoothOpTable.swift'
   ```
@@ -1048,7 +1053,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
 
   ```sh
   swift build --build-tests
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-08" Sources Tests cli/Sources'
   bash -c '! grep -rnE "^@preconcurrency import CoreBluetooth" Sources'
   bash -c '! grep -rlE "^(@preconcurrency )?import CoreBluetooth" Sources | grep -v "^Sources/AngstromBluetooth/"'
@@ -1103,7 +1108,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothClientCoreTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-09" Sources Tests cli/Sources'
   swift test --sanitize=thread --filter 'BluetoothClientCoreTests'
   ```
@@ -1144,7 +1149,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothDiscoveryTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-10" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement Sources/Angstrom/Bluetooth/LaMarzoccoBluetoothClient+Discovery.swift (SPEC §4.14). The members are static and touch no instance state or raw tap; they use default BluetoothTiming() and the transport's sleeper. Write your own fileprivate availability wait, the same rule as §4.2 step 3 including the `.poweredOnWait` sleep on the transport's sleeper (do not depend on the [main] helpers, which are implemented in parallel). scanAll: availability, then central.scan(for:duration) returned unchanged (no name filter). discoverMachines: scanAll, then keep a peripheral iff its name is non-nil, non-empty and case-sensitively starts with one of BluetoothConstants.machineNamePrefixes ("LINEAR_4" matches). Keep first-seen order, de-duplicated. readToken: availability; ONE connect with timing.tokenReadConnectTimeout (10 s); no auth; discover({token}, refresh: false), and a missing characteristic → `Could not find characteristic 0c0b7847-e12b-09a8-b04b-8e0922a9abab on machine.`; read; strict UTF-8 with NO NUL stripping, invalid → `.decoding("bluetooth token: invalid UTF-8")`; a .gatt error with ATT code 2/5/8/15 → `.bluetoothConnectionFailed("Could not read the Bluetooth token (ATT error <code>). Is the machine in pairing mode?")`; always disconnect. The token read is never printed. gattTable: one connect with timing.connectTimeout, link.gattTable(timeout:), disconnect; no auth.
@@ -1176,7 +1181,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'MachineTransportRoutingTests|LaMarzoccoMachineTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W1-11" Sources Tests cli/Sources'
   bash -c 'n=$(grep -cE "(^|[^A-Za-z_])(self\.)?dashboard = " Sources/AngstromUI/LaMarzoccoMachine.swift); test "$n" -eq 1 || { echo "dashboard assignments: $n"; exit 1; }'
   ```
@@ -1203,7 +1208,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   ```sh
   swift build --package-path cli
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   swift build --build-tests
   bash -c '! grep -rn "unimplemented: BT-W1-12" Sources Tests cli/Sources'
   plutil -lint cli/Support/Info.plist
@@ -1247,7 +1252,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothClientRequestsSmokeTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-01" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement Sources/Angstrom/Bluetooth/LaMarzoccoBluetoothClient+Requests.swift (SPEC §6.11 [+Requests]). request(_:frame:) is exactly §4.4 steps 1–7: the request gate held end to end; ensureConnected; resolve; a write with response (operationTimeout) tapped as .write; the same-link check `self.link !== link` → `.bluetoothConnectionFailed("Client is not connected")` (D7a), else resetIdleTimer(); a read of the same characteristic tapped as .read; on error mapTransportError(phase: .request), then dropConnectionInBackground() for drop-class errors unless `shotCounterEnabled && link != nil`; rethrow. resolve(_:on:) is exactly §4.5, including one in-place rediscovery and an unconditional drop when the characteristic is still missing. readSetting writes BluetoothCodec.readRequestFrame to 0a0b… and returns BluetoothCodec.responseText (context = setting rawValue). Decoding happens AFTER the gate is released, so a decode error never drops the link. sendCommand writes the frame to 0b0b…, reads 0b0b…, and decodes with BluetoothResponseDecoder.commandStatus. A non-success status is RETURNED, not thrown. setTemperature rejects a non-finite value with `.operationNotAvailable("temperature must be finite")` before any I/O (D21), and does not round. rawRead returns the verbatim bytes before NUL truncation. Write narrow smoke tests only; the parity suites are BT-W3-01/02/03.
@@ -1279,7 +1284,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothClientShotCounterSmokeTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-02" Sources Tests cli/Sources'
   swift test --sanitize=thread --filter 'BluetoothClientShotCounterSmokeTests'
   ```
@@ -1320,7 +1325,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --package-path cli
   swift test --package-path cli --filter 'BleSessionTests|BleOutputTests'
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-03" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement cli/Sources/angcli/Ble/BleSession.swift and BleOutput.swift with exactly the PLAN §3.2 declarations. BleSession: token precedence --ble-token → LAMARZOCCO_BLE_TOKEN → cloud (Bootstrap.connect() + MachineSelector.choose(serial:) + bluetoothAuthToken(serial:)). A nil cloud token → CLIError("The cloud has no Bluetooth token for <serial>. Use 'angcli ble token' in pairing mode or the QR label."). Peripheral selection per §10.2 with an interactive pick on stderr. Never persist the token or the peripheral id. cliError maps .bluetoothUnavailable(.unauthorized(_)) and .poweredOff to the exact §10.3 texts. BleOutput: one JSON object per line. A raw line is {"ts","dir":">>"|"<<","kind":"write|read|notification|event","char","hex","text"} built through Redact.bluetoothFrame (never bypass it). Decoded lines are {"ts","event","value"} with CLI-local Encodable mirrors of BluetoothShotCounterUpdate/BluetoothMachineTelemetry. tokenLine is masked unless showSecret. Reuse Stdout/Stderr/Timestamp from Output.swift (read-only for you). Tests cover only pure functions: no CoreBluetooth and no network. Build DiscoveredPeripheral, BluetoothGATTService and BluetoothGATTCharacteristic values with their public inits (SPEC §6.2); angcli is a separate package and cannot see `package` declarations.
@@ -1347,7 +1352,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --package-path cli
   swift test --package-path cli --filter 'BleDiscoveryCommandTests'
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-04" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement cli/Sources/angcli/Ble/BleScan.swift, BleGatt.swift and BleToken.swift (SPEC §10.1) on top of the PLAN §3.2 API (BleSession/BleOutput are implemented in parallel by BT-W2-03: only call their declared signatures). scan: `--duration <s>` (default 5). Without `--all` it calls LaMarzoccoBluetoothClient.discoverMachines; with `--all` it calls the public LaMarzoccoBluetoothClient.scanAll (unfiltered, SPEC §4.14) and prints the count to stderr. It prints one peripheralLine per peripheral (name may be null with --all). Only public Angstrom API is visible from cli/ (no `package` access). gatt: requires --peripheral and prints gattLines. token: requires --peripheral, calls LaMarzoccoBluetoothClient.readToken, prints tokenLine masked unless `--show-secret`, which prints to stdout only. Map errors through BleSession.cliError. Tests are argument-parsing only (`Ble*.parse([...])`); no hardware.
@@ -1375,7 +1380,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --package-path cli
   swift test --package-path cli --filter 'BleRequestCommandTests'
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-05" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement cli/Sources/angcli/Ble/BleRead.swift and BleCmd.swift (SPEC §10.1). read <setting|all> takes @OptionGroup BleTargetOptions. For each setting it calls rawRead and then the typed read, and prints BleOutput.readLine with `raw` = the UTF-8 text of the verbatim bytes (hex if not UTF-8) and a CLI-local Encodable mirror as `decoded`. cmd has nested subcommands: `power <on|off>`, `steam <on|off>`, `temp <coffee|steam> <celsius>`, `standby --enabled <bool> --minutes <n> --mode <LastBrewing|PowerOn>`. Each requires `--confirm`, enforced in validate() with a ValidationError (it actuates hardware), and prints BleOutput.commandLine with success = status.isSuccess. Use only the PLAN §3.2 signatures of BleSession/BleOutput (implemented in parallel by BT-W2-03). Tests are parsing/validation only.
@@ -1402,7 +1407,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --package-path cli
   swift test --package-path cli --filter 'BleListenTests'
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   bash -c '! grep -rn "unimplemented: BT-W2-06" Sources Tests cli/Sources'
   ```
 - **Task (brief body):** Implement cli/Sources/angcli/Ble/BleListen.swift (SPEC §10.1, §10.3). It takes @OptionGroup BleTargetOptions and `--raw` / `--decoded` (reuse OutputMode from AngCLI.swift; both are shown by default). Register client.rawFrames(), connectionEvents() and shotCounterEvents() BEFORE startShotCounter(), so the auth and subscribe frames are captured. Print through BleOutput (rawLine / connectionLine / shotCounterLine). Install SignalHandler(SIGINT) → stopShotCounter() + disconnect(), mirroring Listen.swift:34-38, and exit 0. If startShotCounter returns false, print `Shot counter not supported by this machine` to stderr and exit non-zero. Use only the PLAN §3.2 signatures (BT-W2-03 implements them in parallel). Tests are parsing only.
@@ -1595,7 +1600,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothConnectionTests|BluetoothAuthTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   swift test --sanitize=thread --filter 'BluetoothConnectionTests|BluetoothAuthTests'
   ```
 - **Task (brief body):** Port the upstream connection and auth tests assigned below into Tests/AngstromTests/Bluetooth/BluetoothConnectionTests.swift and BluetoothAuthTests.swift, against the real LaMarzoccoBluetoothClient over the AngstromTestSupport fakes. Read each upstream test in full first, and assert the same observable behaviour (op sequences via FakeBluetoothLink.recordedOps, connectCount, events, flags, sleeper durations). Restated tests follow the SPEC §9.4 wording: C12 = exactly one pending idle sleep after each command, and firing it disconnects; C51 = connect(to: peripheral) uses the stored id on every reconnect; C55 = a cancelled event-stream iteration stops delivery to that consumer only. Also write the Angstrom-only tests listed below. You own test files only. If behaviour deviates from SPEC, apply the BLOCKED-BY protocol (PLAN §1.6) against the fix owner (BT-W1-09 main, BT-W2-01 requests, BT-W2-02 shot counter, BT-W0-03 fakes).
@@ -1641,7 +1646,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothRequestTests|BluetoothDiagnosticsTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Task (brief body):** Port the upstream request tests assigned below into BluetoothRequestTests.swift. Assert the exact bytes written (FakeBluetoothLink.recordedOps), the characteristic used, and the decoded values (SPEC §9.3.1/§9.3.2 vectors). Also write the gap tests: G-CODEC-5 (malformed reads throw .decoding and do NOT drop the link); the derived frames BT-REQ-002/005/006 at client level; a non-finite temperature rejected with no write; a non-success status returned not thrown; the smartStandBy "enabled":"false" → false (D5). BluetoothDiagnosticsTests covers rawFrames(): the auth write has isSecret == true and every other frame false; write/read frames are verbatim and directional; a shot-counter notification is tapped BEFORE the replay drop ([replay dropped] marker follows); the lifecycle markers appear in order; no frames are buffered for a listener that subscribes later; two listeners both receive frames; rawRead returns bytes before NUL truncation. You own test files only; use BLOCKED-BY against BT-W2-01/BT-W1-09/BT-W1-02/BT-W1-03 for defects.
 
@@ -1678,7 +1683,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'ShotCounterLifecycleTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Task (brief body):** Port the shot-counter lifecycle tests assigned below into ShotCounterLifecycleTests.swift. Restated tests follow SPEC §9.4: C36 = one subscribe, no second .subscribed, returns true; C37/C38 = a consumer of shotCounterEvents() that calls stopShotCounter() (case 1) or disconnect() (case 2) on .unsubscribed causes exactly one unsubscribe, and the events are [.subscribed, .unsubscribed]. C20 asserts connects with refresh [false, true], one extra disconnect, still connected, idle re-armed. Also write the gap tests below. You own the test file only; use BLOCKED-BY against BT-W2-02/BT-W2-01/BT-W1-09 for defects.
 
@@ -1713,7 +1718,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'ShotCounterNotificationTests|ShotCounterRecordedSessionTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Risks:**
   - SPEC U22: the per-line golden was hand-traced. Escalate rather than edit.
@@ -1749,7 +1754,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'ShotCounterReconnectTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   swift test --sanitize=thread --filter 'ShotCounterReconnectTests'
   ```
 - **Risks:**
@@ -1780,7 +1785,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothDeviceStateTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Task (brief body):** Implement Sources/AngstromUI/LaMarzoccoMachine+BluetoothConnection.swift. startObservingBluetoothConnection() (called from init when bluetooth != nil) starts bluetoothConnectionTask: a MainActor Task with [weak self] that iterates `await bluetooth.connectionEvents()` and sets isBluetoothConnected (true on .connected, false on .disconnected). bluetoothConnectionEvents() returns the client's stream, or an already-finished stream without a client (upstream returns a no-op unregister, _thing.py:116-126). Tests use BluetoothMachineHarness. Trigger a connection with a client read (e.g. `try await harness.bluetooth!.machineMode()`), never through UI commands (BT-W3-07 builds those in parallel). Port T01/T02/M15 and add G-DEV-9.
 
@@ -1823,7 +1828,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothFallbackTests|BluetoothCommandSideEffectTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Task (brief body):** Implement the Bluetooth branch of bluetoothFirst(bluetooth:cloud:) in Sources/AngstromUI/LaMarzoccoMachine+BluetoothCommands.swift, exactly per the SPEC §4.16 pseudocode. When a BLE client exists, ALWAYS try it first (no isBluetoothConnected check). On isSuccess, return CommandResponse(id: status.id, status: .success, errorCode: nil). On a non-success status, fall through to the cloud, or without a cloud client throw .commandFailed(status: status.status, errorCode: status.message) (D18). Catch only errors whose isBluetoothConnectionFailure is true: rethrow when there is no cloud client, else log the upstream message and fall back. Every other error (.bluetoothTimedOut, .decoding, CancellationError) propagates with NO cloud call. With neither client, throw .cloudOnlyFunctionality. The six call sites and their gating/optimistic updates already exist (BT-W1-11). Do not edit LaMarzoccoMachine.swift; if a call site is wrong, BLOCKED-BY BT-W1-11. Tests use BluetoothMachineHarness with its failure modes: assert the BLE frames (BT-FALLBACK-001…006 bytes via bluetoothWrites(to:)), the cloud command names/bodies (cloudCommandCount/cloudCommandBody), and the optimistic widget values (SNAP-003…005). M01–M12 is one parametrised test over six commands × {BLE ok → no cloud call; BLE .bluetoothConnectionFailed → exactly one cloud call}.
 
@@ -1862,7 +1867,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothDashboardRefreshTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   ```
 - **Task (brief body):** Implement Sources/AngstromUI/LaMarzoccoMachine+BluetoothDashboard.swift per SPEC §4.17 and §4.18. refreshDashboardFromBluetooth: without a BLE client throw `.bluetoothConnectionFailed("Bluetooth client not initialized")`; if model is nil or .unknown, run refreshModelFromBluetooth() first (D17), otherwise read no capabilities; read machineMode, isPlumbedIn (.decoding → false; other errors propagate), tankStatus, boilers, in that order; any error propagates with NO mutation; then setBaseDashboard((baseDashboard ?? Dashboard(machine: Machine(serialNumber:model:), widgets: [])).applyingBluetoothState(state, model:)). Do not stamp lastUpdateAt (Q11); do not touch settings/schedule/connected. Return the rendered dashboard. refreshModelFromBluetooth: read machineCapabilities and set only machine.model on the base (rebuild Dashboard(machine:widgets:)); errors propagate; return the capabilities. Tests use BluetoothMachineHarness with settingResponses scripted with the exact upstream payloads. To cover the interaction with an active shot-counter overlay without depending on BT-W3-09 (built in parallel), set `machine.bluetoothBrewingUpdate` directly and call `machine.renderDashboard()`, then refresh and assert the overlay is re-applied over the new base.
 
@@ -1905,7 +1910,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'ShotCounterOverlayTests'
   swift test
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
   swift test --sanitize=thread --filter 'ShotCounterOverlayTests'
   ```
 - **Task (brief body):** Implement Sources/AngstromUI/LaMarzoccoMachine+ShotCounter.swift per SPEC §4.19. startShotCounter: false without a BLE client; subscribe to bluetooth.shotCounterEvents() BEFORE starting; consume it in a MainActor Task ([weak self]) calling handleShotCounterEvent; on a throw or false, cancel the listener and rethrow or return false; on true set isShotCounterActive. Do not gate on shotCounterSupported or the model. stopShotCounter: cancel the listener FIRST, await bluetooth?.stopShotCounter(), reset telemetry, clearBluetoothBrewingState(notify: false), isShotCounterActive = false; keep lastShotTime. handleShotCounterEvent follows the §4.19 event table exactly. Mutate state BEFORE emitting on bluetoothEvents() (G-DEV-12). Re-arm the expiry on EVERY brewing update and never on telemetry. Telemetry mode → updateBaseDashboard { $0.settingMachineMode(m).settingMachineState(MachineState(bluetoothMode: m)) }. .gaveUp → isShotCounterActive = false, lastError, .shotCounterStopped. Expiry: a MainActor task sleeping bluetoothBrewingStateTimeout through brewingExpirySleep, then clearBluetoothBrewingState(notify: true). bluetoothEvents() is a multiplexed stream. Tests drive the expiry with setBluetoothBrewingExpiryForTesting and a gate-controlled sleep, and drive cloud pushes through the existing MockWebSocket. Use the BT-OVL-001 and D7–D13 vectors of §9.3.8 verbatim. Simulate the BLE refresh in M20/M21 with `machine.updateBaseDashboard { $0.applyingBluetoothState(state, model: …) }` (exactly §4.17 step 6), because refreshDashboardFromBluetooth is built in parallel by BT-W3-08. C39 is restated: a bluetoothEvents() consumer calling stopShotCounter() does not recurse or deadlock.
@@ -1927,7 +1932,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   ```sh
   swift build --package-path cli
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   plutil -lint cli/Support/Info.plist
   bash -c '! grep -q unsafeFlags Package.swift'
   ```
@@ -2081,8 +2086,8 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift test
   swift build --package-path cli
   swift test --package-path cli
-  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
-  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && ! grep -E "/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\+BluetoothToken\.swift|Sources/AngstromBluetooth/|Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:" .build/bt-warnings.log'
+  bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && ! grep -E "/cli/(Sources/angcli/Ble/|Sources/angcli/Output\.swift|Sources/angcli/AngCLI\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:" cli/.build/bt-warnings.log'
   bash -c '! grep -rn "BLOCKED-BY" Tests cli/Tests'
   bash -c '! grep -rn "unimplemented: BT-" Sources Tests cli/Sources'
   swift package --allow-writing-to-directory .build/bt-docs generate-documentation --target Angstrom --target AngstromUI --target AngstromBluetooth --enable-experimental-combined-documentation --disable-indexing --output-path .build/bt-docs

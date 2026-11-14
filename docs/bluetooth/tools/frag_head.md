@@ -65,7 +65,9 @@
   approves them** (see §8, approval A0). It is the only branch packages merge into, and it is
   merged to `main` as one PR at the end (approval A4).
 - **Package branches:** `bt/<id-lowercased>` (e.g. `bt/bt-w1-02`). Each one is checked out in its
-  own worktree, `.claude/worktrees/<id>` inside the repo (git-ignored). Its base is the
+  own worktree, `.claude/worktrees/<id>/angstrom` inside the repo (git-ignored; the directory must
+  be named `angstrom` because `cli/Package.swift` refers to its parent package by directory
+  name). Its base is the
   integration HEAD **at the start of the wave**. In Wave 0 (dag) and Wave 5 (serial), a package's
   base is the integration HEAD when it starts, after all of its dependencies have merged.
 - **Cleanup:** once a wave has merged into `bluetooth/integration`, every worktree of that wave

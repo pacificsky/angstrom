@@ -93,14 +93,15 @@ TEST = "swift test"
 CLI_BUILD = "swift build --package-path cli"
 CLI_TEST = "swift test --package-path cli"
 # G5 builds from scratch in its own scratch path: an incremental (null) build prints no diagnostics.
+# NO_COLOR=1: swiftc colours diagnostics even through a pipe, and the escape code before `warning:` defeats the regex.
 WARN = ("bash -c 'set -o pipefail; mkdir -p .build; rm -rf .build/g5; "
-        "swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && "
+        "NO_COLOR=1 swift build --build-tests --scratch-path .build/g5 2>&1 | tee .build/bt-warnings.log && "
         "! grep -E \"/(Sources/Angstrom/Bluetooth/|Sources/Angstrom/LaMarzoccoCloudClient\\+BluetoothToken\\.swift|Sources/AngstromBluetooth/|"
         "Sources/AngstromUI/|Tests/AngstromTestSupport/|Tests/AngstromTests/Bluetooth/|Tests/AngstromUITests/Bluetooth/)[^:]*:[0-9]+:[0-9]+: warning:\" "
         ".build/bt-warnings.log'")
 # G5' (CLI): the same rule for the angcli package's Bluetooth files.
 CLI_WARN = ("bash -c 'set -o pipefail; mkdir -p cli/.build; rm -rf cli/.build/g5; "
-            "swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && "
+            "NO_COLOR=1 swift build --package-path cli --build-tests --scratch-path cli/.build/g5 2>&1 | tee cli/.build/bt-warnings.log && "
             "! grep -E \"/cli/(Sources/angcli/Ble/|Sources/angcli/Output\\.swift|Sources/angcli/AngCLI\\.swift|Tests/angcliTests/Ble)[^:]*:[0-9]+:[0-9]+: warning:\" "
             "cli/.build/bt-warnings.log'")
 BLOCKED = "bash -c '! grep -rn \"BLOCKED-BY\" Tests cli/Tests'"
@@ -307,7 +308,8 @@ pkg(id="BT-W1-01", title="Leaf types: parity tests and fixes (enums, coercion, m
     deliverables=["Tests that pin every Wave 0 leaf implementation to SPEC/upstream; fixes to those leaf files if they deviate."],
     task=(
         "Write the parity and unit tests for the leaf types that BT-W0-01 implemented, and fix those files wherever they deviate from the SPEC. You own the leaf source files only for fixes; do not change any frozen signature. "
-        "BluetoothEnumsTests: the five characteristic UUIDs and every §2.2 constant, verbatim against $UPSTREAM/src/pylamarzocco/clients/_bluetooth.py:40-54; BluetoothReadSetting and BluetoothBrewingState raw values (const.py:322-339); BluetoothBoilerType raw round-trip including .other; Model(bluetoothFamily:) for every row of the §6.5 table plus whitespace and case normalisation; Model.match(\"GS3\") still .gs3 (D8); MachineState/BoilerStatus(bluetoothMode:) for all four MachineMode cases; SteamLevel ↔ temperature both ways; a null shotCounterSupported in a Machine payload decodes as false. "
+        "SPEC §3.10 was amended after BT-W0-01 merged, so BluetoothWireCoercion.swift implements the OLD rules in three places; bring it into line and pin each with the test named below: (1) int: try the exact `Int(n.stringValue)` path first for a non-float number, so 9223372036854775807 and -9223372036854775808 decode exactly instead of throwing; (2) double: a string containing x or X (a hex float such as \"0x1p3\") is an error; (3) string: an integer literal too large for UInt64 (a non-fractional NSDecimalNumber) renders as its decimal digits, not float text. "
+        "BluetoothEnumsTests: the five characteristic UUIDs and every §2.2 constant, verbatim against $UPSTREAM/src/pylamarzocco/clients/_bluetooth.py:40-54; BluetoothReadSetting and BluetoothBrewingState raw values (const.py:322-339); BluetoothBoilerType raw round-trip including .other; Model(bluetoothFamily:) for every row of the §6.5 table plus whitespace and case normalisation; Model(code: \"GS3\") is still .gs3 (Model.match is private, so test it through the public initialiser; D8); MachineState/BoilerStatus(bluetoothMode:) for all four MachineMode cases; SteamLevel ↔ temperature both ways; a null shotCounterSupported in a Machine payload decodes as false. "
         "BluetoothWireCoercionTests: every row of the SPEC §3.10 table. Include JSON true/false versus the numbers 1/0 (the CFBoolean hazard), \"false\" → false for wire and notification bools (D5a), array/object truthiness for both bool rules ([] → false, {\"a\":1} → true), int truncation 93.5 → 93, int(\"93.5\") fails, int from 1e300 and from 12345678901234567890 throws without trapping (D5d), float(\"abc\") fails, \"nan\"/\"inf\" strings fail (D5e), \"1_0\" fails (D5f), numeric strings for doubles, str() of bool → \"True\"/\"False\", a required string that is null → \"None\" and absent → throws, an optional string that is null → nil, and an array/object string → its compact sorted-keys JSON text (D5c). "
         "BluetoothModelsTests: merging never clears and false/0/\"\" count as set; isEmpty; telemetry merge; the BluetoothShotCounterUpdate default start time; isSuccess is case-insensitive; the BluetoothJSONValue subscript; RawBluetoothFrame marker texts and mtuMarker; every §6.4 errorDescription verbatim; isBluetoothConnectionFailure for every case; BluetoothTransportError.description is non-empty for every case."),
     extraTests=[
@@ -324,6 +326,9 @@ pkg(id="BT-W1-01", title="Leaf types: parity tests and fixes (enums, coercion, m
         "BluetoothWireCoercionTests.testStringFromContainerIsCompactJSON (Angstrom-only: D5c)",
         "BluetoothWireCoercionTests.testIntRejectsOutOfRangeAndNonFinite (Angstrom-only: D5d)",
         "BluetoothWireCoercionTests.testDoubleRejectsNonFiniteAndUnderscoreStrings (Angstrom-only: D5e, D5f)",
+        "BluetoothWireCoercionTests.testIntExactAtIntBounds (Angstrom-only: §3.10 amendment)",
+        "BluetoothWireCoercionTests.testDoubleRejectsHexFloatString (Angstrom-only: §3.10 amendment)",
+        "BluetoothWireCoercionTests.testStringFromHugeIntegerIsDigits (Angstrom-only: §3.10 amendment)",
         "BluetoothModelsTests.testBrewingMergeNeverClears", "BluetoothModelsTests.testIsEmpty",
         "BluetoothModelsTests.testTelemetryMerge", "BluetoothModelsTests.testUpdateDefaultStartTime",
         "BluetoothModelsTests.testCommandStatusIsSuccessCaseInsensitive", "BluetoothModelsTests.testJSONValueSubscript",
