@@ -494,6 +494,80 @@ final class FakeBluetoothTests: XCTestCase {
             XCTAssertEqual(error as? BluetoothTransportError, .notConnected)
         }
         XCTAssertEqual(link.recordedOps, [.read(write), .write(write, frame), .write(auth, frame)])
+
+        // Cancelling the task of a held op (the C41 recipe, §9.4 / `TBC:1197-1220`): once released, the
+        // op is still recorded but throws `CancellationError` without reaching `onRead`.
+        let live = FakeBluetoothLink.laMarzocco(token: "token")
+        let readCalls = Counter()
+        live.onRead = { _ in readCalls.increment(); return Data([0x01]) }
+        let liveGate = Gate()
+        live.beforeOp = { op in await liveGate.arrive(op, hold: true) }
+        let cancelled = Task { try await live.read(authUUID, timeout: timeout) }
+        let cancelledArrived = await liveGate.waitForHeld()
+        XCTAssertEqual(cancelledArrived, .read(auth))
+        cancelled.cancel()
+        liveGate.release()
+        let cancelledResult = await cancelled.result
+        XCTAssertThrowsError(try cancelledResult.get()) { error in
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(live.recordedOps, [.read(auth)])
+        XCTAssertEqual(readCalls.value, 0, "a cancelled op must not reach onRead")
+    }
+
+    /// Angstrom-only: §5.3 / §5.4 — like the real seam, every throwing op of a cancelled task throws
+    /// `CancellationError` (ops are still recorded; a dropped link still wins with `.notConnected`),
+    /// `unsubscribe`/`disconnect` still complete, and a cancelled `connect` is counted but pops nothing.
+    func testCancelledOpsThrowCancellationError() async throws {
+        let link = FakeBluetoothLink.laMarzocco(token: "token")
+        let writes = Counter()
+        link.onWrite = { _, _ in writes.increment() }
+        let (readUUID, writeUUID, shotUUID, timeout) = (read, write, shot, opTimeout)
+        let wanted: Set<GATTUUID> = [read, write, auth, shot]
+
+        let outcomes = await Task { () -> [Bool] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            func isCancellation(_ body: () async throws -> Void) async -> Bool {
+                do { try await body(); return false } catch { return error is CancellationError }
+            }
+            let results = [
+                await isCancellation { _ = try await link.discover(wanted, refresh: false, timeout: timeout) },
+                await isCancellation { _ = try await link.read(writeUUID, timeout: timeout) },
+                await isCancellation { try await link.write(Data([0x01]), to: readUUID, withResponse: true, timeout: timeout) },
+                await isCancellation { try await link.subscribe(shotUUID, timeout: timeout) },
+                await isCancellation { _ = try await link.gattTable(timeout: timeout) },
+            ]
+            await link.unsubscribe(shotUUID)
+            await link.disconnect()
+            return results
+        }.value
+        XCTAssertEqual(outcomes, [true, true, true, true, true])
+        XCTAssertEqual(writes.value, 0, "a cancelled write must not reach onWrite")
+        XCTAssertEqual(link.recordedOps, [.discover(refresh: false), .read(write), .write(read, Data([0x01])),
+                                          .subscribe(shot), .unsubscribe(shot), .disconnect])
+
+        // A dropped link reports `.notConnected` even to a cancelled task.
+        let dropped = await Task { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await link.read(writeUUID, timeout: timeout); return nil } catch { return error }
+        }.value
+        XCTAssertEqual(dropped as? BluetoothTransportError, .notConnected)
+
+        // Central: counted and its timeout recorded, but the queued outcome stays for the next attempt.
+        let central = FakeBluetoothCentral()
+        let queued = FakeBluetoothLink(peripheralID: BluetoothPeripheralID(rawValue: "queued"))
+        central.enqueueConnect(.success(queued))
+        let connectError = await Task { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await central.connect(to: .fake, timeout: timeout); return nil } catch { return error }
+        }.value
+        XCTAssertTrue(connectError is CancellationError, "expected CancellationError, got \(String(describing: connectError))")
+        XCTAssertEqual(central.connectCount, 1)
+        XCTAssertEqual(central.connectTimeouts, [opTimeout])
+        XCTAssertTrue(central.links.isEmpty)
+        let next = try await central.connect(to: .fake, timeout: opTimeout)
+        XCTAssertTrue(next === queued)
+        XCTAssertEqual(central.connectCount, 2)
     }
 
     // MARK: - ManualBluetoothSleeper

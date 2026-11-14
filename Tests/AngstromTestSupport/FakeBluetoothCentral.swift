@@ -6,7 +6,8 @@ import Angstrom
 ///
 /// `connect` performs one attempt: it counts the call, records its timeout, pops the oldest queued
 /// outcome (else calls `makeLink()`), copies `now` into the link and appends it to `links`. A queued
-/// failure is thrown and adds no link. Availability defaults to `.poweredOn`.
+/// failure is thrown and adds no link. A cancelled `connect` is counted, then throws `CancellationError`
+/// without popping an outcome or adding a link. Availability defaults to `.poweredOn`.
 package final class FakeBluetoothCentral: BluetoothCentral, @unchecked Sendable {
     private let lock = NSLock()
     private var state: BluetoothAvailability = .poweredOn
@@ -88,9 +89,14 @@ package final class FakeBluetoothCentral: BluetoothCentral, @unchecked Sendable 
     }
 
     package func connect(to id: BluetoothPeripheralID, timeout: Duration) async throws -> any BluetoothLink {
-        let (queued, makeLink, now): (Result<FakeBluetoothLink, BluetoothTransportError>?, @Sendable () -> FakeBluetoothLink, @Sendable () -> Date) = locked {
+        locked {
             connectCountStorage += 1
             connectTimeoutsStorage.append(timeout)
+        }
+        // Like the real seam (§5.3), a cancelled attempt throws `CancellationError`. It is still counted,
+        // but pops nothing: the queued outcome stays for the next attempt and no link is added.
+        try Task.checkCancellation()
+        let (queued, makeLink, now): (Result<FakeBluetoothLink, BluetoothTransportError>?, @Sendable () -> FakeBluetoothLink, @Sendable () -> Date) = locked {
             let queued = queuedOutcomes.isEmpty ? nil : queuedOutcomes.removeFirst()
             return (queued, makeLinkStorage, nowStorage)
         }

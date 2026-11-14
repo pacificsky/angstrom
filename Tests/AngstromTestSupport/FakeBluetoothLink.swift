@@ -15,8 +15,10 @@ package enum FakeOp: Equatable, Sendable {
 /// (`tests/test_bluetooth_client.py:157-292`).
 ///
 /// Every seam op first awaits `beforeOp`, then appends its `FakeOp` to `recordedOps` (also after a drop,
-/// so a failed attempt is still visible), then — once the link is down — throws `.notConnected`
-/// (`unsubscribe` and `disconnect` never throw). `attMTU()` and `gattTable(timeout:)` are not recorded.
+/// so a failed attempt is still visible), then — once the link is down — throws `.notConnected`, else
+/// throws `CancellationError` if the calling task is cancelled (also when it was cancelled while
+/// `beforeOp` held it), as the real seam does (§5.3). `unsubscribe` and `disconnect` never throw.
+/// `attMTU()` and `gattTable(timeout:)` are not recorded.
 /// `events` is one ordered `.unbounded` stream that finishes after its single `.disconnected`.
 package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     private struct State {
@@ -193,18 +195,24 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     }
 
     package func gattTable(timeout: Duration) async throws -> [BluetoothGATTService] {
-        try locked {
+        let gatt = try locked {
             guard state.isConnected else { throw BluetoothTransportError.notConnected }
             return state.gatt
         }
+        try Task.checkCancellation()
+        return gatt
     }
 
     // MARK: - Private
 
-    /// Awaits `beforeOp`, records `op`, then throws `.notConnected` if the link is down.
+    /// Awaits `beforeOp`, records `op`, then throws `.notConnected` if the link is down, else
+    /// `CancellationError` if the calling task is cancelled — the real adapter's
+    /// `withTaskCancellationHandler` bridge (§5.3, §5.4), so a cancelled op held by `beforeOp` fails
+    /// once released instead of completing (C41, `TBC:1197-1220`).
     private func begin(_ op: FakeOp) async throws {
         let connected = await record(op)
         if !connected { throw BluetoothTransportError.notConnected }
+        try Task.checkCancellation()
     }
 
     /// Awaits `beforeOp`, records `op`; returns whether the link was up when the op was recorded.
