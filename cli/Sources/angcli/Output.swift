@@ -175,3 +175,35 @@ enum Redact {
             in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
     }
 }
+
+// MARK: - Bluetooth frame redaction (SPEC §10.4)
+
+extension Redact {
+    /// The auth characteristic: a write to it carries the Bluetooth token.
+    private static let bluetoothAuthCharacteristic = "0d0b7847-e12b-09a8-b04b-8e0922a9abab"
+    /// The token characteristic: a read of it returns the Bluetooth token (pairing mode).
+    private static let bluetoothTokenCharacteristic = "0c0b7847-e12b-09a8-b04b-8e0922a9abab"
+
+    /// The display form of one raw BLE frame: lowercase hex of the bytes and, when they
+    /// are valid UTF-8, their text (else nil).
+    ///
+    /// Both become ``placeholder`` when the library flags the frame as secret (the auth
+    /// write and the token read) and, as defence in depth whatever `isSecret` says, for
+    /// any write to the auth characteristic and any read of the token characteristic.
+    static func bluetoothFrame(_ frame: RawBluetoothFrame) -> (hex: String, text: String?) {
+        if frame.isSecret || isSecretCharacteristic(frame) {
+            return (hex: placeholder, text: placeholder)
+        }
+        let hex = frame.data.map { String(format: "%02x", $0) }.joined()
+        return (hex: hex, text: String(data: frame.data, encoding: .utf8))
+    }
+
+    private static func isSecretCharacteristic(_ frame: RawBluetoothFrame) -> Bool {
+        guard let characteristic = frame.characteristic?.lowercased() else { return false }
+        switch frame.kind {
+        case .write: return characteristic == bluetoothAuthCharacteristic
+        case .read: return characteristic == bluetoothTokenCharacteristic
+        case .notification, .event: return false
+        }
+    }
+}
