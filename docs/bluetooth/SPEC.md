@@ -3056,7 +3056,7 @@ target dependencies, and the `-sectcreate` linker flags from §8.4. Add `cli/Sup
 |---|---|---|
 | `cli/Package.swift` | add the dependency + `linkerSettings` | C0 |
 | `cli/Support/Info.plist` | new | C0 |
-| `cli/Sources/angcli/AngCLI.swift` | add `Ble.self` to `subcommands`; mention Bluetooth in `abstract`/`discussion`; `version: "1.1.0"` | C0 |
+| `cli/Sources/angcli/AngCLI.swift` | add `Ble.self` to `subcommands`; mention Bluetooth in `abstract`/`discussion`; `version: "2.0.0"` | C0 |
 | `cli/Sources/angcli/Output.swift` | add `Redact.bluetoothFrame` + the UUID rule | C0 |
 | `cli/Sources/angcli/Ble/Ble.swift` | new parent command; `subcommands: [BleScan.self, BleGatt.self, BleToken.self, BleRead.self, BleCmd.self, BleListen.self]` | C0 (declares all six; C1 fills them in) |
 | `cli/Sources/angcli/Ble/BleSession.swift` | new: peripheral and token selection (§10.2), `BluetoothTransport.coreBluetooth()` | C0 |
@@ -3136,7 +3136,7 @@ Each one MUST be recorded in `UPSTREAM.md` (§11).
      signature, `dashboard`'s public read-only shape, `MachineSnapshot` and `Machine` are unchanged.
 - **Behavioural changes for cloud-only users:** none. Without a BLE client every path is the
   existing cloud path. `dashboard` equals `baseDashboard` when no overlay is held.
-- `angcli` version `1.1.0`.
+- `angcli` version `2.0.0`.
 
 ---
 
