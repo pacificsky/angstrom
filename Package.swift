@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "Angstrom", targets: ["Angstrom"]),
         .library(name: "AngstromUI", targets: ["AngstromUI"]),
+        .library(name: "AngstromBluetooth", targets: ["AngstromBluetooth"]),
     ],
     dependencies: [
         // Build-time only: powers `swift package generate-documentation`.
@@ -19,14 +20,21 @@ let package = Package(
     targets: [
         .target(name: "Angstrom"),
         .target(name: "AngstromUI", dependencies: ["Angstrom"]),
+        .target(name: "AngstromBluetooth", dependencies: ["Angstrom"]),
+        .target(
+            name: "AngstromTestSupport",
+            dependencies: ["Angstrom"],
+            path: "Tests/AngstromTestSupport",
+            resources: [.copy("Fixtures")]
+        ),
         .testTarget(
             name: "AngstromTests",
-            dependencies: ["Angstrom"],
+            dependencies: ["Angstrom", "AngstromTestSupport"],
             resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "AngstromUITests",
-            dependencies: ["AngstromUI"],
+            dependencies: ["AngstromUI", "AngstromTestSupport"],
             resources: [.copy("Fixtures")]
         ),
     ]
