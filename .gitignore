@@ -17,3 +17,7 @@ xcuserdata/
 
 # Local DocC preview
 .docs-preview/
+
+# Claude Code: per-package worktrees and local orchestration tooling for the Bluetooth port
+.claude/worktrees/
+.claude/bt/

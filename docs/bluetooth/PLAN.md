@@ -65,9 +65,12 @@
   approves them** (see §8, approval A0). It is the only branch packages merge into, and it is
   merged to `main` as one PR at the end (approval A4).
 - **Package branches:** `bt/<id-lowercased>` (e.g. `bt/bt-w1-02`). Each one is checked out in its
-  own worktree, `../angstrom-wt/<id>`. Its base is the integration HEAD **at the start of the
-  wave**. In Wave 0 (dag) and Wave 5 (serial), a package's base is the integration HEAD when it
-  starts, after all of its dependencies have merged.
+  own worktree, `.claude/worktrees/<id>` inside the repo (git-ignored). Its base is the
+  integration HEAD **at the start of the wave**. In Wave 0 (dag) and Wave 5 (serial), a package's
+  base is the integration HEAD when it starts, after all of its dependencies have merged.
+- **Cleanup:** once a wave has merged into `bluetooth/integration`, every worktree of that wave
+  is removed (`git worktree remove`), including reviewer and verify worktrees. The `bt/<id>`
+  branches stay as local history.
 - **Fix branches:** `bt/<id>-fix<n>`, based on the current integration HEAD (§5.3).
 - **Commits:** agents commit on their own branch with message `<id>: <summary>`. They end the
   message with the repository's required attribution trailer. Agents never push, rebase the
@@ -2672,6 +2675,12 @@ Every path that any package creates or modifies, in first-touch order. W*n*:c = 
 | A3 | On escalation | A fix loop is exhausted (§5.3), a second ownership violation happens (§1.3), or a wave gate still fails after 2 triage rounds. |
 | A4 | After BT-W5-01 is PASS | Merge `bluetooth/integration` → `main` as one PR. Cloud-only behaviour is unchanged, so merging does **not** wait for hardware. |
 | A5 | After the hardware checklist and release checks (§6, §6.1) | Tag **v2.0.0**, update the `UPSTREAM.md` "Ported" date if needed, and let Pronto adopt `AngstromBluetooth`. **Hardware gates the release, not the merge.** |
+
+**Owner delegation (2026-11-14).** The owner approved the SPEC, this plan and the Q1–Q19 defaults
+(A0), and waived the remaining in-flight reviews: the orchestrator decides A1, A2 and A3 itself
+and proceeds without waiting. It records every SPEC amendment in the SPEC status line and every
+escalation decision in the commit that resolves it. A4 (merging to `main`) and A5 (the hardware
+checklist and the release tag) remain the owner's.
 
 ### 8.2 Driver pseudocode
 

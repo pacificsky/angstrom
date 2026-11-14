@@ -11,6 +11,12 @@
 | A4 | After BT-W5-01 is PASS | Merge `bluetooth/integration` → `main` as one PR. Cloud-only behaviour is unchanged, so merging does **not** wait for hardware. |
 | A5 | After the hardware checklist and release checks (§6, §6.1) | Tag **v2.0.0**, update the `UPSTREAM.md` "Ported" date if needed, and let Pronto adopt `AngstromBluetooth`. **Hardware gates the release, not the merge.** |
 
+**Owner delegation (2026-11-14).** The owner approved the SPEC, this plan and the Q1–Q19 defaults
+(A0), and waived the remaining in-flight reviews: the orchestrator decides A1, A2 and A3 itself
+and proceeds without waiting. It records every SPEC amendment in the SPEC status line and every
+escalation decision in the commit that resolves it. A4 (merging to `main`) and A5 (the hardware
+checklist and the release tag) remain the owner's.
+
 ### 8.2 Driver pseudocode
 
 ```python

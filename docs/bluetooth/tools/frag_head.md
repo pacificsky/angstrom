@@ -65,9 +65,12 @@
   approves them** (see §8, approval A0). It is the only branch packages merge into, and it is
   merged to `main` as one PR at the end (approval A4).
 - **Package branches:** `bt/<id-lowercased>` (e.g. `bt/bt-w1-02`). Each one is checked out in its
-  own worktree, `../angstrom-wt/<id>`. Its base is the integration HEAD **at the start of the
-  wave**. In Wave 0 (dag) and Wave 5 (serial), a package's base is the integration HEAD when it
-  starts, after all of its dependencies have merged.
+  own worktree, `.claude/worktrees/<id>` inside the repo (git-ignored). Its base is the
+  integration HEAD **at the start of the wave**. In Wave 0 (dag) and Wave 5 (serial), a package's
+  base is the integration HEAD when it starts, after all of its dependencies have merged.
+- **Cleanup:** once a wave has merged into `bluetooth/integration`, every worktree of that wave
+  is removed (`git worktree remove`), including reviewer and verify worktrees. The `bt/<id>`
+  branches stay as local history.
 - **Fix branches:** `bt/<id>-fix<n>`, based on the current integration HEAD (§5.3).
 - **Commits:** agents commit on their own branch with message `<id>: <summary>`. They end the
   message with the repository's required attribution trailer. Agents never push, rebase the
