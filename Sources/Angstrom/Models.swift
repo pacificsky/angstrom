@@ -22,13 +22,14 @@ public struct Machine: Codable, Sendable, Identifiable, Hashable {
     public var hasFirmwareUpdateAvailable: Bool
     /// Whether the device is operating in offline (local-only) mode.
     public var offlineMode: Bool
-    /// The coffee station this device belongs to, if any. (`bleAuthToken` is
-    /// intentionally not modeled — Bluetooth is out of scope.)
+    /// The coffee station this device belongs to, if any. The Bluetooth token
+    /// is deliberately not a `Machine` field. Read it with
+    /// `LaMarzoccoCloudClient.bluetoothAuthToken(serial:)`.
     public var coffeeStation: CoffeeStation?
     public var imageURL: URL?
-    /// Whether the machine reports live shot-counter data. Upstream only
-    /// consumes that data over Bluetooth (out of scope here); the flag itself is
-    /// a cloud field, so it's surfaced for consumers that gate UI on it.
+    /// Whether the machine reports live shot-counter data. That data arrives
+    /// only over Bluetooth (``LaMarzoccoBluetoothClient/startShotCounter()``);
+    /// the flag itself is a cloud field, surfaced for consumers that gate UI on it.
     public var shotCounterSupported: Bool
 
     public var id: String { serialNumber }
@@ -221,6 +222,16 @@ public enum LaMarzoccoError: Error, Sendable, Equatable {
     /// The action exists on this model but isn't available in the machine's
     /// current state (e.g. brewing pressure outside profile mode).
     case operationNotAvailable(String)
+    /// A Bluetooth connection, discovery or GATT operation failed (upstream `BluetoothConnectionFailed`/`BleakError`).
+    case bluetoothConnectionFailed(String)
+    /// The machine rejected the Bluetooth token (upstream `BluetoothAuthenticationFailed`).
+    case bluetoothAuthenticationFailed
+    /// Bluetooth is off, unauthorized, unsupported or not ready.
+    case bluetoothUnavailable(BluetoothAvailability)
+    /// A request-phase Bluetooth read/write did not complete in time (upstream bare `TimeoutError`).
+    case bluetoothTimedOut(String)
+    /// The operation needs the cloud, but no cloud client was given (upstream `CloudOnlyFunctionality`).
+    case cloudOnlyFunctionality
 }
 
 extension LaMarzoccoError: LocalizedError {
@@ -250,6 +261,40 @@ extension LaMarzoccoError: LocalizedError {
             return "Unsupported for this machine: \(message)"
         case .operationNotAvailable(let message):
             return "Not available in the machine's current state: \(message)"
+        case .bluetoothConnectionFailed(let message):
+            return "Bluetooth connection failed: \(message)"
+        case .bluetoothAuthenticationFailed:
+            return "Bluetooth authentication failed. The Bluetooth token is likely wrong."
+        case .bluetoothUnavailable(.poweredOff):
+            return "Bluetooth is turned off."
+        case .bluetoothUnavailable(.unauthorized(_)):
+            return "Bluetooth access is not allowed. Check Privacy & Security settings."
+        case .bluetoothUnavailable(.unsupported):
+            return "Bluetooth Low Energy is not supported on this device."
+        case .bluetoothUnavailable(_):
+            return "Bluetooth is not ready."
+        case .bluetoothTimedOut(let message):
+            return "The machine did not answer over Bluetooth in time (\(message))."
+        case .cloudOnlyFunctionality:
+            return "Functionality is cloud only, but cloud client not initialized."
+        }
+    }
+}
+
+extension LaMarzoccoError {
+    /// Mirrors upstream's `except (BleakError, BluetoothConnectionFailed)` (MACH:1025):
+    /// true for `.bluetoothConnectionFailed`, `.bluetoothAuthenticationFailed`, `.bluetoothUnavailable`.
+    ///
+    /// Upstream's `BluetoothAuthenticationFailed` subclasses `BluetoothConnectionFailed`, and an
+    /// unavailable adapter surfaces as a `BleakError`; Swift enum cases have no subclassing, so this
+    /// property stands in for that relation (D10). `.bluetoothTimedOut` is deliberately excluded:
+    /// upstream raises a bare `TimeoutError`, which the device layer does not catch.
+    public var isBluetoothConnectionFailure: Bool {
+        switch self {
+        case .bluetoothConnectionFailed, .bluetoothAuthenticationFailed, .bluetoothUnavailable:
+            return true
+        default:
+            return false
         }
     }
 }
