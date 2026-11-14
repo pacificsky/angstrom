@@ -22,7 +22,15 @@ let package = Package(
             name: "angcli",
             dependencies: [
                 .product(name: "Angstrom", package: "Angstrom"),
+                .product(name: "AngstromBluetooth", package: "Angstrom"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            // Embed Support/Info.plist into the Mach-O (`__TEXT,__info_plist`) so macOS
+            // TCC finds NSBluetoothAlwaysUsageDescription for `angcli ble` (SPEC §8.4).
+            // `unsafeFlags` is allowed only because this package is always a root
+            // package, never a dependency; the root Angstrom manifest must not carry it.
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", "Support/Info.plist"]),
             ]
         ),
         .testTarget(
