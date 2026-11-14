@@ -11,6 +11,9 @@ final class FakeBluetoothTests: XCTestCase {
     private let auth = BluetoothConstants.authCharacteristic
     private let shot = BluetoothConstants.shotCounterCharacteristic
     private let opTimeout: Duration = .seconds(20)
+    /// Upper bound on every wait for a stream to finish or a waiter to resume, so a regressed fake fails
+    /// the test instead of hanging it.
+    private let hangGuard: TimeInterval = 5
 
     // MARK: - FakeBluetoothCentral
 
@@ -95,28 +98,152 @@ final class FakeBluetoothTests: XCTestCase {
         let initial = await central.availability()
         XCTAssertEqual(initial, .poweredOn)
 
-        var first = central.availabilityUpdates().makeAsyncIterator()
-        var second = central.availabilityUpdates().makeAsyncIterator()
+        let first = central.availabilityUpdates()
+        let second = central.availabilityUpdates()
         central.setAvailability(.poweredOff)
         central.setAvailability(.unauthorized(.denied))
         let current = await central.availability()
         XCTAssertEqual(current, .unauthorized(.denied))
 
-        var late = central.availabilityUpdates().makeAsyncIterator()
+        let late = central.availabilityUpdates()
         central.setAvailability(.poweredOn)
 
-        var firstSeen: [BluetoothAvailability?] = []
-        var secondSeen: [BluetoothAvailability?] = []
-        for _ in 0..<3 {
-            firstSeen.append(await first.next())
-            secondSeen.append(await second.next())
-        }
+        let firstSeen = await values(of: first, limit: 3)
+        let secondSeen = await values(of: second, limit: 3)
         XCTAssertEqual(firstSeen, [.poweredOff, .unauthorized(.denied), .poweredOn])
         XCTAssertEqual(secondSeen, [.poweredOff, .unauthorized(.denied), .poweredOn])
-        let lateFirst = await late.next()
-        XCTAssertEqual(lateFirst, .poweredOn)
+        let lateSeen = await values(of: late, limit: 1)
+        XCTAssertEqual(lateSeen, [.poweredOn])
         let after = await central.availability()
         XCTAssertEqual(after, .poweredOn)
+    }
+
+    /// Angstrom-only: §6.17 — `connectPeripheralIDs` records the id of every `connect(to:timeout:)` attempt
+    /// in order: successful, queued-failure, `connectFailure` and cancelled attempts alike, one per count.
+    func testConnectPeripheralIDsRecordedInOrder() async throws {
+        let central = FakeBluetoothCentral()
+        XCTAssertEqual(central.connectPeripheralIDs, [])
+        let (a, b, c, d) = (BluetoothPeripheralID(rawValue: "A"), BluetoothPeripheralID(rawValue: "B"),
+                            BluetoothPeripheralID(rawValue: "C"), BluetoothPeripheralID(rawValue: "D"))
+
+        _ = try await central.connect(to: a, timeout: opTimeout)
+        central.enqueueConnect(.failure(.timedOut("connect")))
+        do {
+            _ = try await central.connect(to: b, timeout: opTimeout)
+            XCTFail("the queued failure must be thrown")
+        } catch let error as BluetoothTransportError {
+            XCTAssertEqual(error, .timedOut("connect"))
+        }
+        central.connectFailure = .unknownPeripheral(c)
+        do {
+            _ = try await central.connect(to: c, timeout: opTimeout)
+            XCTFail("connectFailure must be thrown")
+        } catch let error as BluetoothTransportError {
+            XCTAssertEqual(error, .unknownPeripheral(c))
+        }
+        let timeout = opTimeout
+        let cancelledError = await Task { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await central.connect(to: d, timeout: timeout); return nil } catch { return error }
+        }.value
+        XCTAssertTrue(cancelledError is CancellationError, "expected CancellationError, got \(String(describing: cancelledError))")
+        central.connectFailure = nil
+        let last = try await central.connect(to: .fake, timeout: opTimeout)
+
+        XCTAssertEqual(central.connectPeripheralIDs, [a, b, c, d, .fake])
+        XCTAssertEqual(central.connectCount, 5)
+        XCTAssertEqual(central.connectPeripheralIDs.count, central.connectTimeouts.count)
+        XCTAssertEqual(central.links.count, 2)
+        XCTAssertTrue(central.links[1] === last)
+    }
+
+    /// Angstrom-only: §6.17 — `connectFailure` (default nil) is thrown by every attempt with nothing
+    /// queued instead of calling `makeLink()`; a queued outcome (success or failure) takes precedence; the
+    /// attempt is still counted with its timeout and peripheral id recorded, and adds no link.
+    func testConnectFailureThrownWhenNothingQueued() async throws {
+        let central = FakeBluetoothCentral()
+        XCTAssertNil(central.connectFailure)
+        let made = FakeBluetoothLink(peripheralID: BluetoothPeripheralID(rawValue: "made"))
+        let makeCalls = Counter()
+        central.makeLink = { makeCalls.increment(); return made }
+        let queued = FakeBluetoothLink(peripheralID: BluetoothPeripheralID(rawValue: "queued"))
+
+        central.connectFailure = .timedOut("connect")
+        XCTAssertEqual(central.connectFailure, .timedOut("connect"))
+        central.enqueueConnect(.success(queued))
+        let first = try await central.connect(to: .fake, timeout: .seconds(1))
+        XCTAssertTrue(first === queued, "a queued success wins over connectFailure")
+
+        for timeout: Duration in [.seconds(2), .seconds(3)] {
+            do {
+                _ = try await central.connect(to: .fake, timeout: timeout)
+                XCTFail("connectFailure must be thrown on every attempt with nothing queued")
+            } catch let error as BluetoothTransportError {
+                XCTAssertEqual(error, .timedOut("connect"))
+            }
+        }
+        XCTAssertEqual(makeCalls.value, 0, "connectFailure replaces makeLink()")
+
+        central.enqueueConnect(.failure(.unknownPeripheral(.fake)))
+        do {
+            _ = try await central.connect(to: .fake, timeout: .seconds(4))
+            XCTFail("the queued failure must be thrown")
+        } catch let error as BluetoothTransportError {
+            XCTAssertEqual(error, .unknownPeripheral(.fake), "a queued failure wins over connectFailure")
+        }
+
+        central.connectFailure = nil
+        let fifth = try await central.connect(to: .fake, timeout: .seconds(5))
+        XCTAssertTrue(fifth === made)
+        XCTAssertEqual(makeCalls.value, 1)
+
+        XCTAssertEqual(central.connectCount, 5)
+        XCTAssertEqual(central.connectTimeouts, [.seconds(1), .seconds(2), .seconds(3), .seconds(4), .seconds(5)])
+        XCTAssertEqual(central.connectPeripheralIDs, Array(repeating: .fake, count: 5))
+        let links = central.links
+        XCTAssertEqual(links.count, 2)
+        XCTAssertTrue(links[0] === queued)
+        XCTAssertTrue(links[1] === made)
+    }
+
+    /// Angstrom-only: §6.17 — `availabilitySubscriberCount` counts live `availabilityUpdates()` streams:
+    /// +1 when one is created, −1 when it terminates (deallocated) or its consumer is cancelled.
+    func testAvailabilitySubscriberCountTracksLiveStreams() async throws {
+        let central = FakeBluetoothCentral()
+        XCTAssertEqual(central.availabilitySubscriberCount, 0)
+
+        let consumed = central.availabilityUpdates()
+        XCTAssertEqual(central.availabilitySubscriberCount, 1)
+        do {
+            let transient = central.availabilityUpdates()
+            XCTAssertEqual(central.availabilitySubscriberCount, 2)
+            withExtendedLifetime(transient) {}
+        }
+        XCTAssertEqual(central.availabilitySubscriberCount, 1, "a deallocated stream is no longer live")
+
+        // A live subscriber sees a change made once the count is non-zero.
+        central.setAvailability(.poweredOff)
+        let delivered = await values(of: consumed, limit: 1)
+        XCTAssertEqual(delivered, [.poweredOff])
+        XCTAssertEqual(central.availabilitySubscriberCount, 1, "a stream stays live between iterations")
+
+        let consumer = Task { () -> [BluetoothAvailability] in
+            var seen: [BluetoothAvailability] = []
+            for await availability in consumed { seen.append(availability) }
+            return seen
+        }
+        consumer.cancel()
+        let finished = await bounded("the cancelled consumer finishes", file: #filePath, line: #line) {
+            await consumer.value
+        }
+        XCTAssertNotNil(finished)
+        XCTAssertEqual(central.availabilitySubscriberCount, 0, "a cancelled consumer's stream is no longer live")
+
+        // Changes with no live stream are still applied to the state.
+        central.setAvailability(.unsupported)
+        let state = await central.availability()
+        XCTAssertEqual(state, .unsupported)
+        XCTAssertEqual(central.availabilitySubscriberCount, 0)
     }
 
     // MARK: - FakeBluetoothLink
@@ -150,6 +277,51 @@ final class FakeBluetoothTests: XCTestCase {
             .unsubscribe(shot),
             .discover(refresh: true),
             .disconnect,
+        ])
+    }
+
+    /// Angstrom-only: §6.17 — `requestedTimeouts` holds the `timeout:` of every discover / read / write /
+    /// subscribe / gattTable call in call order: a held op keeps its call position, and cancelled ops and
+    /// ops on a dropped link (which throw) are still recorded; unsubscribe/disconnect take no timeout.
+    func testLinkRecordsRequestedTimeoutsInCallOrder() async throws {
+        let link = FakeBluetoothLink.laMarzocco(token: "token")
+        link.replayOnSubscribe = []
+        XCTAssertEqual(link.requestedTimeouts, [])
+        let ms: @Sendable (Int) -> Duration = { .milliseconds($0) }
+
+        _ = try await link.discover(BluetoothConstants.sessionCharacteristics, refresh: false, timeout: ms(100))
+        _ = try await link.read(write, timeout: ms(200))
+        try await link.write(Data("boilers\0".utf8), to: read, withResponse: true, timeout: ms(300))
+        try await link.subscribe(shot, timeout: ms(400))
+        _ = try await link.gattTable(timeout: ms(500))
+
+        // A write held by `beforeOp` was called before the read that overtakes it.
+        let gate = Gate()
+        link.beforeOp = { op in await gate.arrive(op, hold: Self.isWrite(op)) }
+        let (writeUUID, authUUID) = (write, auth)
+        let held = Task { try await link.write(Data([0x01]), to: writeUUID, withResponse: true, timeout: ms(600)) }
+        _ = try await waitForHeld(gate)
+        _ = try await link.read(write, timeout: ms(700))
+        gate.release()
+        try await held.value
+        link.beforeOp = nil
+
+        // A cancelled op throws, but its timeout is recorded.
+        let cancelled = await Task { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await link.read(authUUID, timeout: ms(800)); return nil } catch { return error }
+        }.value
+        XCTAssertTrue(cancelled is CancellationError, "expected CancellationError, got \(String(describing: cancelled))")
+
+        await link.unsubscribe(shot)
+        await link.disconnect()
+        await assertNotConnected { _ = try await link.read(self.write, timeout: ms(900)) }
+        await assertNotConnected { _ = try await link.gattTable(timeout: ms(1000)) }
+
+        XCTAssertEqual(link.requestedTimeouts, (1...10).map { ms($0 * 100) })
+        XCTAssertEqual(link.recordedOps, [
+            .discover(refresh: false), .read(write), .write(read, Data("boilers\0".utf8)), .subscribe(shot),
+            .read(write), .write(write, Data([0x01])), .read(auth), .unsubscribe(shot), .disconnect, .read(write),
         ])
     }
 
@@ -469,7 +641,7 @@ final class FakeBluetoothTests: XCTestCase {
         let (writeUUID, authUUID, timeout) = (write, auth, opTimeout)
 
         let held = Task { try await link.write(frame, to: writeUUID, withResponse: true, timeout: timeout) }
-        let arrived = await gate.waitForHeld()
+        let arrived = try await waitForHeld(gate)
         XCTAssertEqual(arrived, .write(write, frame))
         XCTAssertEqual(link.recordedOps, [], "a held op is not recorded yet")
 
@@ -485,7 +657,7 @@ final class FakeBluetoothTests: XCTestCase {
 
         // A drop while an op is held: once released it is recorded and throws `.notConnected`.
         let second = Task { try await link.write(frame, to: authUUID, withResponse: true, timeout: timeout) }
-        let secondArrived = await gate.waitForHeld()
+        let secondArrived = try await waitForHeld(gate)
         XCTAssertEqual(secondArrived, .write(auth, frame))
         link.drop(.disconnected(code: nil))
         gate.release()
@@ -503,7 +675,7 @@ final class FakeBluetoothTests: XCTestCase {
         let liveGate = Gate()
         live.beforeOp = { op in await liveGate.arrive(op, hold: true) }
         let cancelled = Task { try await live.read(authUUID, timeout: timeout) }
-        let cancelledArrived = await liveGate.waitForHeld()
+        let cancelledArrived = try await waitForHeld(liveGate)
         XCTAssertEqual(cancelledArrived, .read(auth))
         cancelled.cancel()
         liveGate.release()
@@ -576,13 +748,13 @@ final class FakeBluetoothTests: XCTestCase {
     /// throws `CancellationError` and removes the sleep from pending.
     func testManualSleeperFireAndCancel() async throws {
         let sleeper = ManualBluetoothSleeper()
-        await sleeper.waitForPending(.idleDisconnect, count: 0)   // already satisfied
+        try await waitForPending(sleeper, .idleDisconnect, count: 0)   // already satisfied
         XCTAssertEqual(sleeper.pendingCount(.idleDisconnect), 0)
 
         let oldest = Task { try await sleeper.sleep(for: .seconds(30), purpose: .idleDisconnect) }
-        await sleeper.waitForPending(.idleDisconnect, count: 1)
+        try await waitForPending(sleeper, .idleDisconnect, count: 1)
         let newest = Task { try await sleeper.sleep(for: .seconds(31), purpose: .idleDisconnect) }
-        await sleeper.waitForPending(.idleDisconnect, count: 2)
+        try await waitForPending(sleeper, .idleDisconnect, count: 2)
         XCTAssertEqual(sleeper.pendingCount(.idleDisconnect), 2)
         XCTAssertEqual(sleeper.startedCount(.idleDisconnect), 2)
         XCTAssertEqual(sleeper.requested(.idleDisconnect), [.seconds(30), .seconds(31)])
@@ -615,7 +787,7 @@ final class FakeBluetoothTests: XCTestCase {
             try await sleeper.sleep(for: .seconds(30), purpose: .idleDisconnect)
             return "fired"
         }
-        await sleeper.waitForPending(.idleDisconnect, count: 1)
+        try await waitForPending(sleeper, .idleDisconnect, count: 1)
         sleeper.fire(.idleDisconnect)
         let thirdValue = try await third.value
         XCTAssertEqual(thirdValue, "fired")
@@ -657,7 +829,7 @@ final class FakeBluetoothTests: XCTestCase {
         // With `.poweredOnWait` manual, that sleep suspends until fired.
         let waiting = ManualBluetoothSleeper(manual: [.idleDisconnect, .poweredOnWait])
         let wait = Task { try await waiting.sleep(for: .seconds(10), purpose: .poweredOnWait) }
-        await waiting.waitForPending(.poweredOnWait, count: 1)
+        try await waitForPending(waiting, .poweredOnWait, count: 1)
         XCTAssertEqual(waiting.pendingCount(.poweredOnWait), 1)
         XCTAssertEqual(waiting.pendingCount(.idleDisconnect), 0)
         waiting.fire(.poweredOnWait)
@@ -748,11 +920,57 @@ final class FakeBluetoothTests: XCTestCase {
         return bytes
     }
 
-    /// Every event of a link whose stream has already finished (or is about to).
-    private func collect(_ link: FakeBluetoothLink) async -> [LinkEvent] {
-        var events: [LinkEvent] = []
-        for await event in link.events { events.append(event) }
-        return events
+    /// Every event of a link whose stream has already finished (or is about to), within `hangGuard`.
+    private func collect(_ link: FakeBluetoothLink, file: StaticString = #filePath,
+                         line: UInt = #line) async -> [LinkEvent] {
+        await values(of: link.events, file: file, line: line)
+    }
+
+    /// The first `limit` values of `stream` (all of them if it finishes sooner), within `hangGuard`.
+    /// On timeout the test fails and the consumer is cancelled; `[]` is returned.
+    private func values<Element: Sendable>(of stream: AsyncStream<Element>, limit: Int = .max,
+                                           file: StaticString = #filePath, line: UInt = #line) async -> [Element] {
+        let collected = await bounded("stream values", file: file, line: line) { () -> [Element] in
+            var seen: [Element] = []
+            for await value in stream.prefix(limit) { seen.append(value) }
+            return seen
+        }
+        return collected ?? []
+    }
+
+    /// The op `gate` holds, failing (rather than hanging) if none is held within `hangGuard`.
+    private func waitForHeld(_ gate: Gate, file: StaticString = #filePath, line: UInt = #line) async throws -> FakeOp {
+        let held = await bounded("an op is held", file: file, line: line) { await gate.waitForHeld() }
+        return try XCTUnwrap(held, "no op was held", file: file, line: line)
+    }
+
+    /// `waitForPending`, failing (rather than hanging) if the count is not reached within `hangGuard`.
+    private func waitForPending(_ sleeper: ManualBluetoothSleeper, _ purpose: SleepPurpose, count: Int,
+                                file: StaticString = #filePath, line: UInt = #line) async throws {
+        let reached = await bounded("\(count) pending \(purpose) sleeps", file: file, line: line) { () -> Bool in
+            await sleeper.waitForPending(purpose, count: count)
+            return true
+        }
+        _ = try XCTUnwrap(reached, "\(count) pending \(purpose) sleeps never reached", file: file, line: line)
+    }
+
+    /// Runs `body` in a task and waits at most `hangGuard` for it (an expectation, no polling). On
+    /// timeout `fulfillment` records the failure, the task is cancelled and nil is returned.
+    private func bounded<T: Sendable>(_ what: String, file: StaticString, line: UInt,
+                                      _ body: @escaping @Sendable () async -> T) async -> T? {
+        let done = expectation(description: what)
+        let result = ResultBox<T>()
+        let task = Task {
+            result.set(await body())
+            done.fulfill()
+        }
+        await fulfillment(of: [done], timeout: hangGuard)
+        guard let value = result.value else {
+            task.cancel()
+            XCTFail("timed out after \(hangGuard) s waiting for \(what)", file: file, line: line)
+            return nil
+        }
+        return value
     }
 
     private func assertNotConnected(_ body: () async throws -> Void,
@@ -785,6 +1003,14 @@ private final class Counter: @unchecked Sendable {
     private var count = 0
     var value: Int { lock.lock(); defer { lock.unlock() }; return count }
     func increment() { lock.lock(); count += 1; lock.unlock() }
+}
+
+/// A thread-safe single-value slot filled by a `bounded` task.
+private final class ResultBox<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: T?
+    var value: T? { lock.lock(); defer { lock.unlock() }; return storage }
+    func set(_ newValue: T) { lock.lock(); storage = newValue; lock.unlock() }
 }
 
 /// A thread-safe append-only list for `@Sendable` handler closures.

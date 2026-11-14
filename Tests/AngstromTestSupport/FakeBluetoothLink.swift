@@ -18,7 +18,9 @@ package enum FakeOp: Equatable, Sendable {
 /// so a failed attempt is still visible), then — once the link is down — throws `.notConnected`, else
 /// throws `CancellationError` if the calling task is cancelled (also when it was cancelled while
 /// `beforeOp` held it), as the real seam does (§5.3). `unsubscribe` and `disconnect` never throw.
-/// `attMTU()` and `gattTable(timeout:)` are not recorded.
+/// `attMTU()` and `gattTable(timeout:)` are not recorded in `recordedOps`. The `timeout:` of every
+/// discover / read / write / subscribe / gattTable call is appended to `requestedTimeouts` on entry,
+/// before `beforeOp` is awaited, so it is kept in call order even when the op is held or then throws.
 /// `events` is one ordered `.unbounded` stream that finishes after its single `.disconnected`.
 package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     private struct State {
@@ -36,6 +38,7 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
         var mtu: Int?
         var gatt: [BluetoothGATTService] = []
         var recordedOps: [FakeOp] = []
+        var requestedTimeouts: [Duration] = []
         var isConnected = true
     }
 
@@ -75,6 +78,8 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     }
 
     /// Awaited before every op is recorded — hold an op in flight (serialisation, cancellation tests).
+    /// Every throwing op throws `CancellationError` if the calling task is cancelled when `beforeOp`
+    /// returns, as the real seam does (§5.3).
     package var beforeOp: (@Sendable (FakeOp) async -> Void)? {
         get { locked { state.beforeOp } }
         set { locked { state.beforeOp = newValue } }
@@ -107,6 +112,9 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     }
 
     package var recordedOps: [FakeOp] { locked { state.recordedOps } }
+
+    /// The `timeout:` of every discover / read / write / subscribe / gattTable call, in call order (D19).
+    package var requestedTimeouts: [Duration] { locked { state.requestedTimeouts } }
 
     /// Yields one `.notification` (while the link is up; a finished stream drops it).
     package func notify(_ characteristic: GATTUUID, _ value: Data, at receivedAt: Date) {
@@ -150,24 +158,28 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     // MARK: - BluetoothLink
 
     package func discover(_ wanted: Set<GATTUUID>, refresh: Bool, timeout: Duration) async throws -> Set<GATTUUID> {
+        requested(timeout)
         try await begin(.discover(refresh: refresh))
         let found = locked { refresh ? (state.presentAfterRefresh ?? state.present) : state.present }
         return wanted.intersection(found)
     }
 
     package func read(_ characteristic: GATTUUID, timeout: Duration) async throws -> Data {
+        requested(timeout)
         try await begin(.read(characteristic))
         let onRead = locked { state.onRead }
         return try onRead(characteristic)
     }
 
     package func write(_ data: Data, to characteristic: GATTUUID, withResponse: Bool, timeout: Duration) async throws {
+        requested(timeout)
         try await begin(.write(characteristic, data))
         let onWrite = locked { state.onWrite }
         try onWrite(characteristic, data)
     }
 
     package func subscribe(_ characteristic: GATTUUID, timeout: Duration) async throws {
+        requested(timeout)
         try await begin(.subscribe(characteristic))
         let (replay, now) = locked { (state.replayOnSubscribe, state.now) }
         for value in replay {
@@ -196,6 +208,7 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
 
     package func gattTable(timeout: Duration) async throws -> [BluetoothGATTService] {
         let gatt = try locked {
+            state.requestedTimeouts.append(timeout)
             guard state.isConnected else { throw BluetoothTransportError.notConnected }
             return state.gatt
         }
@@ -204,6 +217,10 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     }
 
     // MARK: - Private
+
+    private func requested(_ timeout: Duration) {
+        locked { state.requestedTimeouts.append(timeout) }
+    }
 
     /// Awaits `beforeOp`, records `op`, then throws `.notConnected` if the link is down, else
     /// `CancellationError` if the calling task is cancelled — the real adapter's
