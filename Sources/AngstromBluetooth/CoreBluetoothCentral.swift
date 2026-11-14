@@ -57,6 +57,26 @@ final class CoreBluetoothOperations<Key: CoreBluetoothOperationKey>: @unchecked 
         onAbandon: (@Sendable () -> Void)? = nil,
         start: @escaping @Sendable () throws -> Void
     ) async throws -> T {
+        try await performOrSatisfy(key, timeout: timeout, cancellable: cancellable, precheck: precheck,
+                                   onAbandon: onAbandon) {
+            try start()
+            return .issued
+        }
+    }
+
+    /// `perform`, except that `start` may report the operation as already satisfied instead of
+    /// issuing a request. A satisfied operation is finished by its OWN token, right after `start`
+    /// returns — never through `finishOldest`, which is the delegate-callback path: it would first
+    /// swallow a reply owed by an abandoned op with the same key and leave this one registered
+    /// until its timeout (or finish an older op with the same key in its place).
+    func performOrSatisfy<T: Sendable>(
+        _ key: Key,
+        timeout: Duration,
+        cancellable: Bool = true,
+        precheck: (@Sendable () throws -> Void)? = nil,
+        onAbandon: (@Sendable () -> Void)? = nil,
+        start: @escaping @Sendable () throws -> CoreBluetoothStart
+    ) async throws -> T {
         guard cancellable else {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
                 queue.async {
@@ -141,7 +161,7 @@ final class CoreBluetoothOperations<Key: CoreBluetoothOperationKey>: @unchecked 
         continuation: CheckedContinuation<T, any Error>,
         precheck: (@Sendable () throws -> Void)?,
         onAbandon: (@Sendable () -> Void)?,
-        start: @Sendable () throws -> Void
+        start: @Sendable () throws -> CoreBluetoothStart
     ) {
         dispatchPrecondition(condition: .onQueue(queue))
         do {
@@ -177,11 +197,18 @@ final class CoreBluetoothOperations<Key: CoreBluetoothOperationKey>: @unchecked 
                 continuation.resume(throwing: error)
             }
         }
+        let outcome: CoreBluetoothStart
         do {
-            try start()
+            outcome = try start()
         } catch {
             // `start` throws only before it issues a request, so nothing is owed.
             table.finish(token, .failure(error), abandoning: false)
+            return
+        }
+        if case .satisfied(let value) = outcome {
+            // Nothing was sent, so nothing is owed. By token: `start` may already have finished
+            // this op (e.g. while satisfying every waiter for the key), in which case this is a no-op.
+            table.finish(token, .success(value), abandoning: false)
             return
         }
         queue.asyncAfter(deadline: .now() + coreBluetoothSeconds(timeout)) {
@@ -190,6 +217,14 @@ final class CoreBluetoothOperations<Key: CoreBluetoothOperationKey>: @unchecked 
             }
         }
     }
+}
+
+/// What an operation's `start` closure did (see `CoreBluetoothOperations.performOrSatisfy`).
+enum CoreBluetoothStart: Sendable {
+    /// A CoreBluetooth request was issued; a delegate callback (or the timeout) finishes the op.
+    case issued
+    /// Nothing needed issuing: finish the op now, by its own token, with this value.
+    case satisfied(any Sendable)
 }
 
 /// `Duration` as seconds for `DispatchTime` arithmetic (negative durations clamp to 0).
@@ -470,16 +505,18 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
     private func findByScanning(_ id: BluetoothPeripheralID, _ uuid: UUID) async throws {
         let lease = UUID()
         do {
-            let _: Void = try await ops.perform(.find(uuid), timeout: Self.findTimeout) { [self] in
+            let _: Void = try await ops.performOrSatisfy(.find(uuid), timeout: Self.findTimeout) { [self] in
                 try requirePoweredOn()
                 if known[uuid] != nil {
-                    // Discovered by another scan since the lookup: satisfy every find for it.
+                    // Known since the lookup (another scan, or a connect's retrievePeripherals):
+                    // satisfy every OTHER find still waiting for it, then this one by its token.
                     while ops.isAwaiting(.find(uuid)) {
                         ops.finishOldest(.find(uuid), .success(()))
                     }
-                    return
+                    return .satisfied(())
                 }
                 beginScanning(lease: lease)
+                return .issued
             }
         } catch BluetoothTransportError.timedOut {
             await ops.run { [self] in endScanning(lease: lease) }

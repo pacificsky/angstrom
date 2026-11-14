@@ -37,6 +37,11 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
     private var discoveryGeneration: UInt64 = 0
     /// Characteristics whose values are routed to `events` as notifications.
     private var notifying: Set<GATTUUID> = []
+    /// Every `CBService` whose `ObjectIdentifier` has keyed a `.discoverCharacteristics` op on
+    /// this link, retained until termination. An owed reply outlives its op, so the identifier
+    /// must never be reused by a later service object at the same address: that would let the
+    /// stale owed reply swallow the new service's real reply.
+    private var keyedServices: [ObjectIdentifier: CBService] = [:]
     private var isTerminated = false
 
     /// Queue only (created by the central in `didConnect`).
@@ -66,6 +71,7 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
         ops.failAll(where: { _ in true }, error ?? BluetoothTransportError.disconnected(code: nil))
         characteristics.removeAll()
         notifying.removeAll()
+        keyedServices.removeAll() // failAll above dropped every owed reply
         hasDiscovered = false
         if peripheral.delegate === self {
             peripheral.delegate = nil
@@ -146,16 +152,15 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
 
     func disconnect() async {
         // Not cancellable: teardown runs on cancellation paths too, and must still reach CoreBluetooth.
-        let _: Void? = try? await ops.perform(
+        let _: Void? = try? await ops.performOrSatisfy(
             .disconnect, timeout: Self.disconnectTimeout, cancellable: false,
             // No didDisconnectPeripheral within 5 s: treat the link as gone.
             onAbandon: { [self] in handleDisconnect(nil) }
         ) { [self] in
-            if isTerminated {
-                ops.finishOldest(.disconnect, .success(()))
-                return
-            }
+            // Already gone: finish this op by its own token (not via finishOldest).
+            if isTerminated { return .satisfied(()) }
             manager.cancelPeripheralConnection(peripheral)
+            return .issued
         }
     }
 
@@ -315,22 +320,28 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
         }
         let (started, services): (UInt64, [ServiceHandle]) = try await ops.runThrowing { [self] in
             try requireConnected()
-            let handles = (peripheral.services ?? []).map {
+            let current = peripheral.services ?? []
+            for service in current {
+                keyedServices[ObjectIdentifier(service)] = service
+            }
+            let handles = current.map {
                 ServiceHandle(id: ObjectIdentifier($0), uuid: GATTUUID($0.uuid.uuidString))
             }
             return (discoveryGeneration, handles)
         }
         for service in services {
             let key = LinkOperation.discoverCharacteristics(service.id, service: service.uuid)
-            let _: Void = try await ops.perform(key, timeout: try remaining(until: deadline, key.description),
-                                                precheck: requireConnectedCheck) { [self] in
+            let _: Void = try await ops.performOrSatisfy(key, timeout: try remaining(until: deadline, key.description),
+                                                         precheck: requireConnectedCheck) { [self] in
                 try requireConnected()
                 guard let current = peripheral.services?.first(where: { ObjectIdentifier($0) == service.id }) else {
-                    // Invalidated since the service discovery: nothing to ask for.
-                    ops.finishOldest(key, .success(()))
-                    return
+                    // Invalidated since the service discovery: nothing to ask for. Finished by this
+                    // op's own token — finishOldest would first swallow a reply still owed by an
+                    // earlier, timed-out discovery of this service and leave this op hanging.
+                    return .satisfied(())
                 }
                 peripheral.discoverCharacteristics(nil, for: current)
+                return .issued
             }
         }
         try await ops.runThrowing { [self] in
