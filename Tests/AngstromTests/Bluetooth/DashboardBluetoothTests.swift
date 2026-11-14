@@ -481,13 +481,14 @@ final class DashboardBluetoothTests: XCTestCase {
         ])
     }
 
-    /// Angstrom-only: §4.17 — an "existing W" must have the matching typed kind; an .unknown (or other-kind) widget counts as absent and is left in place.
-    func testUnknownWidgetCountsAsAbsent() {
+    /// Angstrom-only: §4.17 (amended) — an .unknown widget carrying a BLE-managed code is replaced in place by the typed widget built from the defaults, keeping its position and index; a code never appears twice.
+    func testUnknownWidgetReplacedInPlace() {
+        let other = Widget(code: "CMGroupDoses", index: 9, kind: .unknown(code: "CMGroupDoses"))
         let unknownStatus = Widget(code: "CMMachineStatus", index: 2, kind: .unknown(code: "CMMachineStatus"))
         let unknownCoffee = Widget(code: "CMCoffeeBoiler", index: 3, kind: .unknown(code: "CMCoffeeBoiler"))
         let unknownLevel = Widget(code: "CMSteamBoilerLevel", index: 4, kind: .unknown(code: "CMSteamBoilerLevel"))
         let unknownNoWater = Widget(code: "CMNoWater", index: 5, kind: .unknown(code: "CMNoWater"))
-        let d = dashboard([unknownStatus, unknownCoffee, unknownLevel, unknownNoWater])
+        let d = dashboard([unknownNoWater, other, unknownLevel, unknownCoffee, unknownStatus])
         let state = BluetoothDashboardState(
             machineMode: .brewing, isPlumbedIn: false, tankStatus: true,
             boilers: [
@@ -497,22 +498,56 @@ final class DashboardBluetoothTests: XCTestCase {
 
         let result = d.applyingBluetoothState(state, model: .lineaMicra)
 
+        let expectedStatus = MachineStatus(status: .poweredOn, availableModes: [.brewing, .standby],
+                                           mode: .brewing, nextStatus: nil, brewingStartTime: nil)
+        let expectedCoffee = CoffeeBoiler(status: .ready, enabled: true, enabledSupported: false,
+                                          targetTemperature: 93, targetTemperatureMin: 80,
+                                          targetTemperatureMax: 110, targetTemperatureStep: 0.1,
+                                          readyStartTime: nil)
+        let expectedLevel = SteamBoilerLevel(status: .ready, enabled: true, enabledSupported: true,
+                                             targetLevel: .level2, targetLevelSupported: true,
+                                             readyStartTime: nil)
+        // Positions and indices kept; nothing appended; untouched codes left alone.
         XCTAssertEqual(result.widgets, [
-            unknownStatus, unknownCoffee, unknownLevel, unknownNoWater,
-            Widget(code: "CMMachineStatus", index: 1, kind: .machineStatus(
-                MachineStatus(status: .poweredOn, availableModes: [.brewing, .standby], mode: .brewing,
-                              nextStatus: nil, brewingStartTime: nil))),
-            Widget(code: "CMCoffeeBoiler", index: 1, kind: .coffeeBoiler(
-                CoffeeBoiler(status: .ready, enabled: true, enabledSupported: false, targetTemperature: 93,
-                             targetTemperatureMin: 80, targetTemperatureMax: 110, targetTemperatureStep: 0.1,
-                             readyStartTime: nil))),
-            Widget(code: "CMSteamBoilerLevel", index: 1, kind: .steamBoilerLevel(
-                SteamBoilerLevel(status: .ready, enabled: true, enabledSupported: true, targetLevel: .level2,
-                                 targetLevelSupported: true, readyStartTime: nil))),
-            Widget(code: "CMNoWater", index: 1, kind: .noWater(NoWater(alarm: false))),
+            Widget(code: "CMNoWater", index: 5, kind: .noWater(NoWater(alarm: false))),
+            other,
+            Widget(code: "CMSteamBoilerLevel", index: 4, kind: .steamBoilerLevel(expectedLevel)),
+            Widget(code: "CMCoffeeBoiler", index: 3, kind: .coffeeBoiler(expectedCoffee)),
+            Widget(code: "CMMachineStatus", index: 2, kind: .machineStatus(expectedStatus)),
         ])
+        for code in ["CMMachineStatus", "CMCoffeeBoiler", "CMSteamBoilerLevel", "CMNoWater"] {
+            XCTAssertEqual(result.widgets.filter { $0.code == code }.count, 1, code)
+        }
+        // The typed accessors return the new widgets.
+        XCTAssertEqual(result.machineStatus, expectedStatus)
+        XCTAssertEqual(result.coffeeBoiler, expectedCoffee)
+        XCTAssertEqual(result.steamBoilerLevel, expectedLevel)
+        XCTAssertEqual(result.noWater, NoWater(alarm: false))
 
-        // A typed widget after an undecodable one with the same code is the "existing" one.
+        // The temperature path replaces an unknown temperature widget in place (non-Mini defaults).
+        let unknownTemp = Widget(code: "CMSteamBoilerTemperature", index: 6, kind: .unknown(code: "CMSteamBoilerTemperature"))
+        let gs3 = dashboard([unknownTemp]).applyingBluetoothState(state, model: .gs3)
+        let expectedTemp = SteamBoilerTemperature(status: .ready, enabled: true, enabledSupported: false,
+                                                  targetTemperature: 128, targetTemperatureMin: 20,
+                                                  targetTemperatureMax: 134, targetTemperatureStep: 0.1,
+                                                  targetTemperatureSupported: true, readyStartTime: nil)
+        XCTAssertEqual(gs3.widgets.first, Widget(code: "CMSteamBoilerTemperature", index: 6,
+                                                 kind: .steamBoilerTemperature(expectedTemp)))
+        XCTAssertEqual(gs3.widgets.filter { $0.code == "CMSteamBoilerTemperature" }.count, 1)
+        XCTAssertEqual(gs3.steamBoilerTemperature, expectedTemp)
+
+        // The opposite steam code is removed even when it is .unknown.
+        let micraWithTemp = dashboard([unknownTemp, unknownLevel]).applyingBluetoothState(state, model: .lineaMicra)
+        XCTAssertFalse(micraWithTemp.widgets.contains { $0.code == "CMSteamBoilerTemperature" })
+        XCTAssertEqual(micraWithTemp.widgets.first,
+                       Widget(code: "CMSteamBoilerLevel", index: 4, kind: .steamBoilerLevel(expectedLevel)))
+        let gs3WithLevel = dashboard([unknownLevel, unknownTemp]).applyingBluetoothState(state, model: .gs3)
+        XCTAssertFalse(gs3WithLevel.widgets.contains { $0.code == "CMSteamBoilerLevel" })
+        XCTAssertEqual(gs3WithLevel.widgets.first,
+                       Widget(code: "CMSteamBoilerTemperature", index: 6, kind: .steamBoilerTemperature(expectedTemp)))
+
+        // A typed widget after an undecodable one with the same code is the "existing" one; the
+        // pre-existing duplicate is left as found (nothing is added).
         let typedLater = dashboard([
             unknownCoffee,
             Widget(code: "CMCoffeeBoiler", index: 7, kind: .coffeeBoiler(coffee(target: 90))),
@@ -526,12 +561,14 @@ final class DashboardBluetoothTests: XCTestCase {
         ])
         XCTAssertEqual(typedLater.widgets.filter { $0.code == "CMCoffeeBoiler" }.count, 2)
 
-        // A CMMachineStatus code carrying another typed kind is not the machine status either.
-        let wrongKind = Widget(code: "CMMachineStatus", index: 1, kind: .machineGroupStatus(machineStatus()))
+        // A hand-built CMMachineStatus code carrying another typed kind (not decodable from the wire)
+        // is not an "existing" machine status, but it does carry the code: replaced in place, never doubled.
+        let wrongKind = Widget(code: "CMMachineStatus", index: 3, kind: .machineGroupStatus(machineStatus()))
         let mismatched = dashboard([wrongKind]).applyingBluetoothState(state, model: .lineaMicra)
-        XCTAssertEqual(mismatched.widgets.first, wrongKind)
-        XCTAssertEqual(mismatched.widgets.filter { $0.code == "CMMachineStatus" }.count, 2)
-        XCTAssertEqual(mismatched.machineStatus?.status, .poweredOn)
+        XCTAssertEqual(mismatched.widgets.first,
+                       Widget(code: "CMMachineStatus", index: 3, kind: .machineStatus(expectedStatus)))
+        XCTAssertEqual(mismatched.widgets.filter { $0.code == "CMMachineStatus" }.count, 1)
+        XCTAssertEqual(mismatched.machineStatus, expectedStatus)
     }
 
     // MARK: - §4.19 overlayingBluetoothBrewing

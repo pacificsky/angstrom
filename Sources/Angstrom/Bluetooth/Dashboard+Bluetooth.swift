@@ -191,7 +191,7 @@ extension Dashboard {
     }
 
     /// The first widget with `code` whose kind is the matching typed case (`.unknown` and any
-    /// other kind count as absent), with its position in `widgets`.
+    /// other kind are skipped), with its position in `widgets`.
     private func firstTyped<T>(code: String,
                                _ extract: (WidgetKind) -> T?) -> (position: Int, value: T)? {
         for (position, widget) in widgets.enumerated() where widget.code == code {
@@ -207,12 +207,18 @@ extension Dashboard {
         return Dashboard(machine: machine, widgets: updated)
     }
 
-    /// §4.17 upsert: rebuild the existing typed `code` widget in place (keeping code and index),
-    /// else append the built default with `index: 1`.
+    /// §4.17 upsert: rebuild the existing typed `code` widget in place (keeping code and index).
+    /// Without one, the first widget carrying `code` (an undecodable cloud widget, `.unknown`) is
+    /// replaced in place, keeping its index, by the widget built from the defaults, so a code never
+    /// appears twice (upstream's `config` is a dict keyed by code). Only when no widget has `code`
+    /// is the built default appended with `index: 1`.
     private func upsertingTyped<T>(code: String, _ extract: (WidgetKind) -> T?,
                                    _ build: (T?) -> WidgetKind) -> Dashboard {
         if let found = firstTyped(code: code, extract) {
             return replacingKind(at: found.position, with: build(found.value))
+        }
+        if let position = widgets.firstIndex(where: { $0.code == code }) {
+            return replacingKind(at: position, with: build(nil))
         }
         return Dashboard(machine: machine, widgets: widgets + [Widget(code: code, index: 1, kind: build(nil))])
     }
