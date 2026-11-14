@@ -147,7 +147,7 @@ final class BluetoothMachineHarness {
     enum Seed { case standard, empty, none, custom(Dashboard) }
     enum BluetoothFailure: Equatable {
         case none
-        case connect                                   // every connect attempt fails .disconnected(code: 7)
+        case connect                                   // every connect attempt fails .disconnected(code: 7) — via central.connectFailure
         case commandWrite                              // writes to 0b0b… throw .gatt(domain: "CBATTErrorDomain", code: 14)
         case commandTimeout                            // writes to 0b0b… throw .timedOut("write")
         case unavailable(BluetoothAvailability)        // central reports this availability
@@ -227,7 +227,9 @@ No existing test file changes (SPEC §7.1).
   - A parity test starts with `/// Upstream: <test function> (<path>:<line>) [<case ids>]`, for
     example `/// Upstream: test_ble_set_power (tests/test_bluetooth_client.py:295) [C01]`. The
     path is relative to `$UPSTREAM`. The line is the `def` line listed in §7.2.
-  - An Angstrom-only test starts with `/// Angstrom-only: <G-… or D… id> — <one line>`.
+  - An Angstrom-only test starts with `/// Angstrom-only: <G-… or D… id> — <one line>`. Where no
+    G-/D- id applies (test-support self-tests, and tests a brief names without an id), the id is the
+    SPEC section the test pins: `/// Angstrom-only: §6.17 — <one line>`.
 - Timing comes only from `ManualBluetoothSleeper`, `BluetoothTestClock` and
   `setBluetoothBrewingExpiryForTesting`. Await background work with
   `drainBackgroundWorkForTesting()`, and await stream events by iterating the stream (with a
@@ -250,7 +252,7 @@ No existing test file changes (SPEC §7.1).
 | G-AUTH-3 | `authenticationFailed` reflects the last auth read and is unchanged by a pre-auth connect failure | BT-W3-01 |
 | G-CONN-1 | Connect: 3 attempts, 20 s timeout each, backoff 0.25 s after `.timedOut`, else 0.1 s | BT-W1-09 |
 | G-CONN-2 | A characteristic found by the in-place rediscovery serves the request on the same link (D7b) | BT-W3-01 |
-| G-CONN-3 | Errors from link `disconnect()`/`unsubscribe` are swallowed on every teardown path | BT-W1-09 |
+| G-CONN-3 | Teardown completes and emits its events on every path when the link is already dead (its ops throw `.notConnected`). The seam's `disconnect()`/`unsubscribe` are non-throwing, so there is nothing to swallow | BT-W1-09 |
 | G-CONN-4 | The idle timer is re-armed on a reused link, armed only after auth, and requests 30 s | BT-W3-01 |
 | G-CONN-5 | With the shot counter enabled but no link, a failed request **does** drop (schedules `dropConnectionInBackground`) | BT-W3-01 |
 | G-CONN-6 | A missing characteristic drops the link even while the shot counter runs, which then starts the reconnect loop | BT-W3-03 |

@@ -5,7 +5,9 @@
 > watermark as the cloud port (`UPSTREAM.md`). Angstrom baseline: `main` @ `e1bc403` (v1.7.0).
 >
 > **Amended 2026-11-14** (orchestrator, from the BT-W0-01 reviews): §3.10 int, double and string
-> rules; §7.1 `Placeholder.swift` row.
+> rules; §7.1 `Placeholder.swift` row. From the BT-W0-03 reviews: §4.13 (availability stream created
+> at loop start), §6.17 (fake hooks `connectPeripheralIDs`, `connectFailure`,
+> `availabilitySubscriberCount`, `requestedTimeouts`; cancellation rule), §9.4 C51.
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -924,6 +926,8 @@ forgotten"). If `!shotCounterEnabled` return. If `wasSubscribed`, emit `.unsubsc
 delay = timing.reconnectInitialDelay          // 1 s
 authFailures = 0
 lastError: LaMarzoccoError? = nil
+updates = central.availabilityUpdates()       // created ONCE, here, before the first sleep: a stream only
+                                              // sees later changes, so creating it per sleep would race (D14)
 while shotCounterEnabled:
     sleep(delay, purpose: .reconnectBackoff)  // BEFORE every attempt, including the first (G-SC-7)
         — ends early if central.availabilityUpdates() yields .poweredOn after a non-poweredOn
@@ -2344,6 +2348,14 @@ package final class FakeBluetoothCentral: BluetoothCentral, @unchecked Sendable 
     package var now: @Sendable () -> Date                           // default: { Date(timeIntervalSince1970: 0) }
     package var connectCount: Int { get }
     package var connectTimeouts: [Duration] { get }
+    /// The peripheral id passed to every `connect(to:timeout:)` attempt, in order (C51).
+    package var connectPeripheralIDs: [BluetoothPeripheralID] { get }
+    /// When non-nil, every connect attempt with nothing queued throws it instead of using `makeLink()`
+    /// (the attempt is still counted and recorded). Default nil.
+    package var connectFailure: BluetoothTransportError?
+    /// Live `availabilityUpdates()` streams (created and not yet terminated). A stream only sees changes
+    /// made after it was created, so a test waits for this to be non-zero before `setAvailability`.
+    package var availabilitySubscriberCount: Int { get }
     package var links: [FakeBluetoothLink] { get }
 }
 
@@ -2356,6 +2368,8 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     package var onRead: @Sendable (GATTUUID) throws -> Data
     package var onWrite: @Sendable (GATTUUID, Data) throws -> Void
     /// Awaited before every op is recorded — hold an op in flight (serialisation, cancellation tests).
+    /// Every throwing op throws `CancellationError` if the calling task is cancelled when `beforeOp`
+    /// returns, as the real seam does (§5.3).
     package var beforeOp: (@Sendable (FakeOp) async -> Void)?
     /// Delivered as notifications, stamped `now()`, BEFORE `subscribe` returns (the machine's replay).
     /// Default mirrors upstream's fake (`self.replay = _tick(3.34)`, TBC:176): most upstream shot-counter
@@ -2366,6 +2380,8 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     package var mtu: Int?
     package var gatt: [BluetoothGATTService]
     package var recordedOps: [FakeOp] { get }
+    /// The `timeout:` of every discover / read / write / subscribe / gattTable call, in call order (D19).
+    package var requestedTimeouts: [Duration] { get }
     package func notify(_ characteristic: GATTUUID, _ value: Data, at receivedAt: Date)
     /// Yields `.disconnected(error)` once and finishes `events`. Later ops throw `.notConnected`.
     package func drop(_ error: BluetoothTransportError?)
@@ -2878,7 +2894,7 @@ Files are under `Tests/AngstromTests/Bluetooth/` unless prefixed `UI:` (`Tests/A
 | C48 `test_command_error_keeps_shot_counter_connection` (`TBC:1287`) | `ShotCounterLifecycleTests.testCommandErrorKeepsShotCounterLink` | T3 |
 | C49 `test_authentication_failed_flag` (`TBC:1305`) | `BluetoothAuthTests.testAuthenticationFailedFlagSetAndCleared` | T1 |
 | C50 `test_discover_devices_prefixes` (`TBC:1326`) | `BluetoothDiscoveryTests.testNamePrefixFilter` | BluetoothDiscoveryTests (B6) |
-| C51 `test_ble_device_callback` (`TBC:1345`) | restated: `…testConnectUsesStoredPeripheralID` (`connect(to: peripheral)` on every reconnect) | B6 |
+| C51 `test_ble_device_callback` (`TBC:1345`) | restated: `…testConnectUsesStoredPeripheralID` (`connect(to: peripheral)` on every reconnect; assert `FakeBluetoothCentral.connectPeripheralIDs`) | B6 |
 | C52 `test_connection_callback_connect_and_idle_disconnect` (`TBC:1361`) | `BluetoothConnectionTests.testConnectionEventsConnectAndIdle` | T1 |
 | C53 `test_connection_callback_connection_lost` (`TBC:1382`) | `…testConnectionEventsDeduplicate` | T1 |
 | C54 `…not_called_on_failed_authentication` (`TBC:1405`) | `BluetoothAuthTests.testUnauthenticatedLinkNeverReportedConnected` | T1 |
