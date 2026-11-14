@@ -5,7 +5,7 @@ import Angstrom
 struct AngCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "angcli",
-        abstract: "Debug the La Marzocco cloud API through Angstrom — hold the websocket open and print raw + decoded frames.",
+        abstract: "Debug the La Marzocco cloud API and Bluetooth link through Angstrom — print raw + decoded frames.",
         discussion: """
             Credentials come from LAMARZOCCO_USERNAME / LAMARZOCCO_PASSWORD or an \
             interactive prompt and are never persisted. The per-install key is \
@@ -14,9 +14,15 @@ struct AngCLI: AsyncParsableCommand {
 
             This talks to the real La Marzocco cloud with real credentials — mind \
             rate limits and ToS.
+
+            `angcli ble` talks to a nearby machine over Bluetooth instead (scan, \
+            GATT table, token, reads, commands, live shot counter). The Bluetooth \
+            token comes from --ble-token, LAMARZOCCO_BLE_TOKEN, or the cloud, and is \
+            never persisted or printed unless explicitly asked for. macOS asks for \
+            Bluetooth access on first use; grant it to your terminal app.
             """,
-        version: "1.0.0",
-        subcommands: [Listen.self, Dump.self, Machines.self],
+        version: "2.0.0",
+        subcommands: [Listen.self, Dump.self, Machines.self, Ble.self],
         defaultSubcommand: Listen.self
     )
 }
