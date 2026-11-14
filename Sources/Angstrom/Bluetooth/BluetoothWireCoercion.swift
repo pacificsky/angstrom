@@ -108,6 +108,12 @@ package enum BluetoothWireCoercion {
             if !CFNumberIsFloatType(n as CFNumber), let exact = Int(n.stringValue) {
                 return exact
             }
+            // A literal outside the 64-bit integer range (or with more digits than a double holds)
+            // arrives as an NSDecimalNumber. Decide with its Decimal value: its doubleValue would
+            // round -9223372036854775809 to -2^63, which then passes the range check as Int.min.
+            if let decimal = n as? NSDecimalNumber {
+                return try truncatedInt(decimal, key: key)
+            }
             let d = n.doubleValue
             let t = d.rounded(.towardZero)
             // Never call Int(_: Double) outside this range: it traps.
@@ -202,6 +208,21 @@ package enum BluetoothWireCoercion {
         var rounded = Decimal()
         NSDecimalRound(&rounded, &value, 0, .down)
         return rounded == value
+    }
+
+    /// int() of an `NSDecimalNumber` (§3.10 int rule): truncate toward zero at scale 0, error unless
+    /// the result lies in `Decimal(Int.min)...Decimal(Int.max)`, else convert exactly. Never uses
+    /// `doubleValue`.
+    private static func truncatedInt(_ decimal: NSDecimalNumber, key: String) throws -> Int {
+        var value = decimal.decimalValue
+        guard !value.isNaN else { throw Failure(detail: "\(key) is not finite: \(decimal)") }
+        var truncated = Decimal()
+        NSDecimalRound(&truncated, &value, 0, value >= 0 ? .down : .up)
+        guard Decimal(Int.min) <= truncated, truncated <= Decimal(Int.max),
+              let exact = Int("\(truncated)") else {
+            throw Failure(detail: "\(key) is out of range: \(decimal)")
+        }
+        return exact
     }
 
     /// `[.sortedKeys, .withoutEscapingSlashes]` compact JSON text of an array/object (D5c).

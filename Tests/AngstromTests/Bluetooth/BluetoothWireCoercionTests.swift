@@ -208,7 +208,8 @@ final class BluetoothWireCoercionTests: XCTestCase {
     /// Angstrom-only: D5d — int() of a value outside Int range, or of a non-finite value, is an error and never traps.
     func testIntRejectsOutOfRangeAndNonFinite() throws {
         for text in ["1e300", "-1e300", "12345678901234567890", "9223372036854775808",
-                     "9223372036854775807.0", "18446744073709551616", "123456789012345678901234567890",
+                     "-9223372036854775809", "-9223372036854775809.0", "18446744073709551616",
+                     "99999999999999999999999999", "123456789012345678901234567890",
                      "-123456789012345678901234567890", #""99999999999999999999""#, #""9223372036854775808""#] {
             assertFails(try C.requiredInt(try json(text), key: "minutes"), text)
         }
@@ -218,6 +219,46 @@ final class BluetoothWireCoercionTests: XCTestCase {
         // The largest in-range float values still convert (Python: int(-2.0**63) == -2**63).
         XCTAssertEqual(try C.requiredInt(try json("-9223372036854775808.0"), key: "minutes"), Int.min)
         XCTAssertEqual(try C.requiredInt(NSNumber(value: 9_223_372_036_854_774_784.0), key: "minutes"), 9_223_372_036_854_774_784)
+        XCTAssertEqual(try C.requiredInt(NSNumber(value: -9_223_372_036_854_775_808.0), key: "minutes"), Int.min)
+    }
+
+    /// Angstrom-only: §3.10 int rule amendment (NSDecimalNumber) — a literal outside the 64-bit
+    /// integer range is decided with its Decimal value, never doubleValue (whose rounding to -2^63
+    /// would silently decode -9223372036854775809 as Int.min).
+    func testIntDecidesNSDecimalNumberWithDecimalValue() throws {
+        // Premise: JSONSerialization returns these literals as NSDecimalNumber.
+        for text in ["-9223372036854775809", "18446744073709551616", "-9223372036854775809.0",
+                     "3.9999999999999999999999", "-3.9999999999999999999999", "9223372036854775807.0",
+                     "-9223372036854775808.9", "99999999999999999999999999"] {
+            XCTAssertTrue(try json(text) is NSDecimalNumber, "premise: \(text) is an NSDecimalNumber")
+        }
+
+        // One below Int.min: an error, not Int.min (its doubleValue is exactly -2^63).
+        assertFails(try C.requiredInt(try json("-9223372036854775809"), key: "minutes"), "Int.min - 1")
+        assertFails(try C.requiredInt(try json("-9223372036854775809.0"), key: "minutes"), "Int.min - 1 (fractional form)")
+        assertFails(try C.requiredInt(try json("-9223372036854775809.9"), key: "minutes"), "below Int.min after truncation")
+        assertFails(try C.requiredInt(NSDecimalNumber(string: "-9223372036854775809"), key: "minutes"), "direct NSDecimalNumber")
+        // Huge positive and negative literals.
+        for text in ["18446744073709551616", "99999999999999999999999999", "-99999999999999999999999999",
+                     "100000000000000000000000000000000000000000.0", "9223372036854775808.5"] {
+            assertFails(try C.requiredInt(try json(text), key: "minutes"), text)
+        }
+        // NaN never comes from JSON, but must not trap either.
+        assertFails(try C.requiredInt(NSDecimalNumber.notANumber, key: "minutes"), "NaN")
+
+        // Fractional NSDecimalNumbers inside Int range truncate toward zero, for both signs.
+        XCTAssertEqual(try C.requiredInt(try json("3.9999999999999999999999"), key: "minutes"), 3)
+        XCTAssertEqual(try C.requiredInt(try json("-3.9999999999999999999999"), key: "minutes"), -3)
+        XCTAssertEqual(try C.requiredInt(try json("0.99999999999999999999999"), key: "minutes"), 0)
+        XCTAssertEqual(try C.requiredInt(try json("-0.5000000000000000000001"), key: "minutes"), 0)
+        XCTAssertEqual(try C.requiredInt(try json("1234567890123456789.75"), key: "minutes"), 1_234_567_890_123_456_789)
+        XCTAssertEqual(try C.requiredInt(try json("-1234567890123456789.75"), key: "minutes"), -1_234_567_890_123_456_789)
+        XCTAssertEqual(try C.requiredInt(try json("5.00000000000000000000"), key: "minutes"), 5)
+        // The bounds themselves, reached only after truncation (no doubleValue rounding to ±2^63).
+        XCTAssertEqual(try C.requiredInt(try json("9223372036854775807.0"), key: "minutes"), Int.max)
+        XCTAssertEqual(try C.requiredInt(try json("9223372036854775807.5"), key: "minutes"), Int.max)
+        XCTAssertEqual(try C.requiredInt(try json("-9223372036854775808.9"), key: "minutes"), Int.min)
+        assertFails(try C.requiredInt(try json("12345678901234567890.5"), key: "minutes"), "above Int.max")
     }
 
     /// Angstrom-only: §3.10 amendment — integer literals at Int.max and Int.min decode exactly via the exact path.
