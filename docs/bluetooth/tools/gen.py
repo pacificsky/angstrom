@@ -382,7 +382,7 @@ IMPL_PRE = (
     "no wall-clock sleeps or sleep-polling in tests. Parity tests start with the doc comment `/// Upstream: <test function> (<path>:<line>) [<case ids>]`; "
     "Angstrom-only tests start with `/// Angstrom-only: <id> — <one line>`. If the SPEC is wrong or unimplementable as written, STOP and report "
     "`SPEC-DEFECT: <section>: <problem>: <proposed amendment>`; do not improvise. If code from an earlier package is defective, keep a test that proves it, "
-    "start it with `throw XCTSkip(\"BLOCKED-BY <owner-id>: <reason>\")` and report it. Remove every `unimplemented: {id}` stub marker. "
+    "start it with `try XCTSkipIf(true, \"BLOCKED-BY <owner-id>: <reason>\")` and report it. Remove every `unimplemented: {id}` stub marker. "
     "When every acceptance command exits 0, commit with message `{id}: <summary>` and reply with: changed files, exact test names added, deviations, "
     "BLOCKED-BY items, open questions.\n\nTASK: ")
 DOCS_PRE = IMPL_PRE.replace("an implementation agent", "a documentation agent")
