@@ -1279,7 +1279,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   - BluetoothClientShotCounterSmokeTests.testLossReconnectsAndResubscribes
   - BluetoothClientShotCounterSmokeTests.testGiveUpEmitsGaveUp
   - BluetoothClientShotCounterSmokeTests.testUnsupportedReturnsFalse
-  - BluetoothClientShotCounterSmokeTests.testSmokePoweredOnCutsBackoff (wait for central.availabilitySubscriberCount > 0 before setAvailability; SPEC §4.13 creates the stream at loop start)
+  - BluetoothClientShotCounterSmokeTests.testSmokePoweredOnCutsBackoff (no polling: make .reconnectBackoff manual and `await sleeper.waitForPending(.reconnectBackoff, count: 1)`; SPEC §4.13 creates the availability stream before the first sleep, so it exists by then — assert central.availabilitySubscriberCount >= 1, then setAvailability)
 - **Acceptance:**
 
   ```sh
@@ -1748,7 +1748,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   - ShotCounterReconnectTests.testCharacteristicGoneGivesUp (Angstrom-only: G-RC-3)
   - ShotCounterReconnectTests.testIdleOrErrorDropWhileEnabledReconnects (Angstrom-only: G-RC-5)
   - ShotCounterReconnectTests.testFirstAttemptWaitsInitialDelay (Angstrom-only: G-SC-7)
-  - ShotCounterReconnectTests.testPoweredOnCutsBackoffShort (Angstrom-only: D14; wait for central.availabilitySubscriberCount > 0 before setAvailability)
+  - ShotCounterReconnectTests.testPoweredOnCutsBackoffShort (Angstrom-only: D14; no polling: after `await sleeper.waitForPending(.reconnectBackoff, count: 1)` the §4.13 availability stream exists — assert central.availabilitySubscriberCount >= 1, then setAvailability)
   - ShotCounterReconnectTests.testGaveUpCarriesLastError (Angstrom-only: D15)
 - **Acceptance:**
 

@@ -2369,7 +2369,8 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     package var onWrite: @Sendable (GATTUUID, Data) throws -> Void
     /// Awaited before every op is recorded — hold an op in flight (serialisation, cancellation tests).
     /// Every throwing op throws `CancellationError` if the calling task is cancelled when `beforeOp`
-    /// returns, as the real seam does (§5.3).
+    /// returns, as the real seam does (§5.3) — unless the link is already down, in which case
+    /// `.notConnected` wins (a dead link is reported as dead, cancelled or not).
     package var beforeOp: (@Sendable (FakeOp) async -> Void)?
     /// Delivered as notifications, stamped `now()`, BEFORE `subscribe` returns (the machine's replay).
     /// Default mirrors upstream's fake (`self.replay = _tick(3.34)`, TBC:176): most upstream shot-counter
@@ -2380,7 +2381,9 @@ package final class FakeBluetoothLink: BluetoothLink, @unchecked Sendable {
     package var mtu: Int?
     package var gatt: [BluetoothGATTService]
     package var recordedOps: [FakeOp] { get }
-    /// The `timeout:` of every discover / read / write / subscribe / gattTable call, in call order (D19).
+    /// The `timeout:` of every discover / read / write / subscribe / gattTable call, in call order (D19):
+    /// recorded at call entry, before `beforeOp` is awaited and even if the op then throws, so a held op
+    /// can sit earlier here than in `recordedOps`.
     package var requestedTimeouts: [Duration] { get }
     package func notify(_ characteristic: GATTUUID, _ value: Data, at receivedAt: Date)
     /// Yields `.disconnected(error)` once and finishes `events`. Later ops throw `.notConnected`.
