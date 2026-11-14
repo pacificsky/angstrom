@@ -438,7 +438,8 @@ optionally a cloud client over the existing `MockBackend`/`MockURLProtocol`
 ```swift
 @MainActor
 final class BluetoothMachineHarness {
-    enum Seed { case standard, empty, none, custom(Dashboard) }
+    enum Seed { case standard, empty, none, custom(Dashboard) }   // .standard leaves connectionDate nil; upstream's snapshot
+                                                                  // fixture also sets connection_date (TBD:64-65): use .custom for that
     enum BluetoothFailure: Equatable {
         case none
         case connect                                   // every connect attempt fails .disconnected(code: 7) — via central.connectFailure
@@ -456,7 +457,8 @@ final class BluetoothMachineHarness {
     /// `.standard` seeds BT-DASH-SEED-001 (SPEC §9.3.6) for `model` through a MachineSnapshot;
     /// `.empty` seeds Dashboard(machine: Machine(serialNumber:, model:), widgets: []); `.none` seeds nothing.
     init(model: Model = .lineaMicra, seed: Seed = .standard, cloud: Bool = true, bluetooth: Bool = true,
-         token: String = "token", settingResponses: [BluetoothReadSetting: Data] = [:],
+         token: String = "token",                      // the token the scripted machine ACCEPTS; the client always sends "token"
+         settingResponses: [BluetoothReadSetting: Data] = [:],
          commandResponse: Data = BluetoothTestVectors.commandSuccess, failure: BluetoothFailure = .none)
     /// BT-DASH-SEED-001: CMMachineStatus(standby,[brewing,standby],standby), CMCoffeeBoiler(standby, enabled,
     /// enabledSupported false, 93.0, 80…100 step 0.1), CMSteamBoilerLevel(standby, enabled, true, level1, true),
