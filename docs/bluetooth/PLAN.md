@@ -159,7 +159,8 @@ Agents may only edit the files they own. When an agent proves that a file from a
 is wrong, it:
 
 1. keeps the test that shows the defect, starting the test body with
-   `throw XCTSkip("BLOCKED-BY <owner-id>: <one line>")`;
+   `try XCTSkipIf(true, "BLOCKED-BY <owner-id>: <one line>")` (not a bare `throw XCTSkip(…)`: the
+   code after it draws an unreachable-code warning, which fails G5);
 2. reports it under `BLOCKED-BY` in its final report.
 
 At the wave barrier, the orchestrator groups all `BLOCKED-BY` reports by **fix owner** (Appendix

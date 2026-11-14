@@ -138,10 +138,9 @@ public final class LaMarzoccoMachine {
         self.cloudClient = client
         self.bluetooth = bluetooth
         if let snapshot, snapshot.serialNumber == serialNumber {
-            self.baseDashboard = snapshot.dashboard
-            self.dashboard = snapshot.dashboard
             self.settings = snapshot.settings
             self.schedule = snapshot.schedule
+            setBaseDashboard(snapshot.dashboard)
         }
         if bluetooth != nil {
             startObservingBluetoothConnection()
@@ -241,7 +240,7 @@ public final class LaMarzoccoMachine {
 
     /// A snapshot of the current state, suitable for persistence.
     public var snapshot: MachineSnapshot {
-        MachineSnapshot(serialNumber: serialNumber, dashboard: dashboard,
+        MachineSnapshot(serialNumber: serialNumber, dashboard: baseDashboard,
                         settings: settings, schedule: schedule)
     }
 
@@ -251,7 +250,7 @@ public final class LaMarzoccoMachine {
     public func refreshDashboard() async throws -> Dashboard {
         try await capturing {
             let value = try await client.dashboard(serial: serialNumber)
-            dashboard = value
+            setBaseDashboard(value)
             lastUpdateAt = Date()
             return value
         }
@@ -292,7 +291,7 @@ public final class LaMarzoccoMachine {
             async let s = client.settings(serial: serialNumber)
             async let sc = client.schedule(serial: serialNumber)
             let (dashboard, settings, schedule) = try await (d, s, sc)
-            self.dashboard = dashboard
+            self.setBaseDashboard(dashboard)
             self.settings = settings
             self.schedule = schedule
             self.lastUpdateAt = Date()
@@ -331,8 +330,9 @@ public final class LaMarzoccoMachine {
         let task = Task { [weak self] in
             for await update in stream {
                 guard let self else { return }
-                if let current = self.dashboard {
-                    self.dashboard = current.applying(update)
+                // Not wholesale: `applying` keeps the base widgets for a widget-less push.
+                if self.baseDashboard != nil {
+                    self.updateBaseDashboard { $0.applying(update) }
                     self.lastUpdateAt = Date()
                 }
             }
@@ -391,44 +391,64 @@ public final class LaMarzoccoMachine {
 
     // MARK: - Commands (forward to client, with optimistic local updates)
 
+    // The six BLE-first commands (SPEC §4.16, upstream `MACH:494-509,764-841,870-892`) route
+    // through `bluetoothFirst(bluetooth:cloud:)` inside `capturing`, after gating. The optimistic
+    // update follows a successful call on either transport.
+
     @discardableResult
     public func setPower(on: Bool) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setPower(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingMachineMode(on ? .brewing : .standby)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setPower(on: on) },
+                cloud: { try await $0.setPower(serial: serialNumber, on: on) })
+        }
+        updateBaseDashboard { $0.settingMachineMode(on ? .brewing : .standby) }
         return response
     }
 
     @discardableResult
     public func setSteam(on: Bool) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setSteam(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingSteamEnabled(on)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setSteam(on: on) },
+                cloud: { try await $0.setSteam(serial: serialNumber, on: on) })
+        }
+        updateBaseDashboard { $0.settingSteamEnabled(on) }
         return response
     }
 
     @discardableResult
     public func setSteamTargetLevel(_ level: SteamLevel) async throws -> CommandResponse {
         let response = try await capturing {
-            try requireModel(Self.steamLevelModels, "steam level")
-            return try await client.setSteamTargetLevel(serial: serialNumber, level)
+            try requireModel(Model.steamLevelModels, "steam level")
+            return try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .steam, celsius: Double(level.bluetoothTargetTemperature)) },
+                cloud: { try await $0.setSteamTargetLevel(serial: serialNumber, level) })
         }
-        dashboard = dashboard?.settingSteamTargetLevel(level)
+        updateBaseDashboard { $0.settingSteamTargetLevel(level) }
         return response
     }
 
     @discardableResult
     public func setCoffeeTargetTemperature(celsius: Double) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setCoffeeTargetTemperature(serial: serialNumber, celsius: celsius) }
-        dashboard = dashboard?.settingCoffeeTargetTemperature(celsius)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .coffee, celsius: celsius) },
+                cloud: { try await $0.setCoffeeTargetTemperature(serial: serialNumber, celsius: celsius) })
+        }
+        updateBaseDashboard { $0.settingCoffeeTargetTemperature(celsius) }
         return response
     }
 
     @discardableResult
     public func setSteamTargetTemperature(celsius: Double) async throws -> CommandResponse {
         let response = try await capturing {
-            try requireModel(Self.steamTemperatureModels, "steam temperature")
-            return try await client.setSteamTargetTemperature(serial: serialNumber, celsius: celsius)
+            try requireModel(Model.steamTemperatureModels, "steam temperature")
+            return try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .steam, celsius: celsius) },
+                cloud: { try await $0.setSteamTargetTemperature(serial: serialNumber, celsius: celsius) })
         }
-        dashboard = dashboard?.settingSteamTargetTemperature(celsius)
+        updateBaseDashboard { $0.settingSteamTargetTemperature(celsius) }
         return response
     }
 
@@ -438,7 +458,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.brewByWeightModels, "brew by weight")
             return try await client.setBrewByWeightMode(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingBrewByWeightMode(mode)
+        updateBaseDashboard { $0.settingBrewByWeightMode(mode) }
         return response
     }
 
@@ -448,7 +468,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.brewByWeightModels, "brew by weight")
             return try await client.setBrewByWeightDoses(serial: serialNumber, dose1: dose1, dose2: dose2)
         }
-        dashboard = dashboard?.settingBrewByWeightDoses(dose1: dose1, dose2: dose2)
+        updateBaseDashboard { $0.settingBrewByWeightDoses(dose1: dose1, dose2: dose2) }
         return response
     }
 
@@ -456,7 +476,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderBaristaLight(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderBaristaLight(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderBaristaLight(on)
+        updateBaseDashboard { $0.settingGrinderBaristaLight(on) }
         return response
     }
 
@@ -474,7 +494,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "machine mode")
             return try await client.setMode(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingMachineMode(mode)
+        updateBaseDashboard { $0.settingMachineMode(mode) }
         return response
     }
 
@@ -484,7 +504,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "auto flush")
             return try await client.setAutoFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingAutoFlush(on)
+        updateBaseDashboard { $0.settingAutoFlush(on) }
         return response
     }
 
@@ -494,7 +514,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "steam flush")
             return try await client.setSteamFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingSteamFlush(on)
+        updateBaseDashboard { $0.settingSteamFlush(on) }
         return response
     }
 
@@ -504,7 +524,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "rinse flush")
             return try await client.setRinseFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingRinseFlushEnabled(on)
+        updateBaseDashboard { $0.settingRinseFlushEnabled(on) }
         return response
     }
 
@@ -514,7 +534,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "rinse flush time")
             return try await client.setRinseFlushTime(serial: serialNumber, seconds: seconds)
         }
-        dashboard = dashboard?.settingRinseFlushTime(seconds)
+        updateBaseDashboard { $0.settingRinseFlushTime(seconds) }
         return response
     }
 
@@ -524,7 +544,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "hot water dose enable")
             return try await client.setHotWaterDoseEnabled(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingHotWaterDoseEnabled(on)
+        updateBaseDashboard { $0.settingHotWaterDoseEnabled(on) }
         return response
     }
 
@@ -534,7 +554,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.groupDoseModels, "hot water dose")
             return try await client.setHotWaterDose(serial: serialNumber, dose: dose, doseIndex: doseIndex)
         }
-        dashboard = dashboard?.settingHotWaterDose(dose, doseIndex: doseIndex)
+        updateBaseDashboard { $0.settingHotWaterDose(dose, doseIndex: doseIndex) }
         return response
     }
 
@@ -556,7 +576,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "group mode")
             return try await client.setGroupMode(serial: serialNumber, mode, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupMode(mode, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupMode(mode, groupIndex: groupIndex) }
         return response
     }
 
@@ -566,7 +586,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.stradaXModels, "coffee boiler enable")
             return try await client.setCoffeeBoilerEnabled(serial: serialNumber, on: on, boilerIndex: boilerIndex)
         }
-        dashboard = dashboard?.settingCoffeeBoilerEnabled(on)
+        updateBaseDashboard { $0.settingCoffeeBoilerEnabled(on) }
         return response
     }
 
@@ -577,7 +597,7 @@ public final class LaMarzoccoMachine {
     public func setGroupDoseMode(_ mode: DoseMode, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
             try requireModel(Self.groupDoseModels, "group dose mode")
-            if let groupDoses = dashboard?.groupDoses,
+            if let groupDoses = baseDashboard?.groupDoses,
                !groupDoses.availableModes.isEmpty, !groupDoses.availableModes.contains(mode) {
                 let available = groupDoses.availableModes.map(\.rawValue)
                 throw LaMarzoccoError.operationNotAvailable(
@@ -585,7 +605,7 @@ public final class LaMarzoccoMachine {
             }
             return try await client.setGroupDoseMode(serial: serialNumber, mode, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupDoseMode(mode, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupDoseMode(mode, groupIndex: groupIndex) }
         return response
     }
 
@@ -596,7 +616,7 @@ public final class LaMarzoccoMachine {
     public func setGroupDose(mode: DoseMode, doseIndex: DoseIndex, dose: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
             try requireModel(Self.groupDoseModels, "group dose")
-            if let groupDoses = dashboard?.groupDoses {
+            if let groupDoses = baseDashboard?.groupDoses {
                 let doses = groupDoses.doses.settings(for: mode)
                 guard !doses.isEmpty else {
                     throw LaMarzoccoError.operationNotAvailable(
@@ -611,7 +631,7 @@ public final class LaMarzoccoMachine {
             return try await client.setGroupDose(serial: serialNumber, mode: mode, doseIndex: doseIndex,
                                                  dose: dose, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupDose(mode: mode, doseIndex: doseIndex, dose: dose, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupDose(mode: mode, doseIndex: doseIndex, dose: dose, groupIndex: groupIndex) }
         return response
     }
 
@@ -622,13 +642,13 @@ public final class LaMarzoccoMachine {
     public func setBrewingPressure(pressure: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
             try requireModel(Self.stradaXModels, "brewing pressure")
-            if let groupDoses = dashboard?.groupDoses, !groupDoses.brewingPressureSupported {
+            if let groupDoses = baseDashboard?.groupDoses, !groupDoses.brewingPressureSupported {
                 throw LaMarzoccoError.operationNotAvailable(
                     "brewing pressure is not supported in the current dose mode (\(groupDoses.mode.rawValue))")
             }
             return try await client.setBrewingPressure(serial: serialNumber, pressure: pressure, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingBrewingPressure(pressure, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingBrewingPressure(pressure, groupIndex: groupIndex) }
         return response
     }
 
@@ -668,7 +688,7 @@ public final class LaMarzoccoMachine {
     public func setGrinderPower(on: Bool) async throws -> CommandResponse {
         let mode: GrinderMode = on ? .grinding : .standby
         let response = try await capturing { try await client.setGrinderMode(serial: serialNumber, mode) }
-        dashboard = dashboard?.settingGrinderMode(mode)
+        updateBaseDashboard { $0.settingGrinderMode(mode) }
         return response
     }
 
@@ -679,7 +699,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.swanGrinderModels, "grind-with mode")
             return try await client.setGrinderGrindWith(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingGrinderGrindWith(mode)
+        updateBaseDashboard { $0.settingGrinderGrindWith(mode) }
         return response
     }
 
@@ -696,12 +716,12 @@ public final class LaMarzoccoMachine {
         if let speedLevel {
             try await setGrinderSpeed(doseIndex: doseIndex, level: speedLevel)
         }
-        let resolvedMode = mode ?? dashboard?.grinderDoses?.mode ?? .rev
+        let resolvedMode = mode ?? baseDashboard?.grinderDoses?.mode ?? .rev
         let response = try await capturing {
             try await client.setGrinderDose(serial: serialNumber, doseIndex: doseIndex, dose: dose,
                                             mode: resolvedMode)
         }
-        dashboard = dashboard?.settingGrinderDose(doseIndex: doseIndex, dose: dose, mode: resolvedMode)
+        updateBaseDashboard { $0.settingGrinderDose(doseIndex: doseIndex, dose: dose, mode: resolvedMode) }
         return response
     }
 
@@ -712,7 +732,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.swanGrinderModels, "more dose")
             return try await client.setGrinderMoreDose(serial: serialNumber, revolutions: revolutions)
         }
-        dashboard = dashboard?.settingGrinderMoreDose(revolutions)
+        updateBaseDashboard { $0.settingGrinderMoreDose(revolutions) }
         return response
     }
 
@@ -722,7 +742,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderSingleDoseMode(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderSingleDoseMode(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderSingleDose(on)
+        updateBaseDashboard { $0.settingGrinderSingleDose(on) }
         return response
     }
 
@@ -730,7 +750,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderMirrorDoses(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderMirrorDoses(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderMirrorDoses(on)
+        updateBaseDashboard { $0.settingGrinderMirrorDoses(on) }
         return response
     }
 
@@ -741,7 +761,7 @@ public final class LaMarzoccoMachine {
             try requireModel(Self.swanGrinderModels, "grinder speed")
             return try await client.setGrinderSpeed(serial: serialNumber, doseIndex: doseIndex, speedLevel: level)
         }
-        dashboard = dashboard?.settingGrinderSpeed(doseIndex: doseIndex, level: level)
+        updateBaseDashboard { $0.settingGrinderSpeed(doseIndex: doseIndex, level: level) }
         return response
     }
 
@@ -754,7 +774,7 @@ public final class LaMarzoccoMachine {
             return try await client.setGrinderAutoSpeedEnabled(serial: serialNumber, doseIndex: doseIndex,
                                                                enabled: enabled, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGrinderAutoSpeed(doseIndex: doseIndex, enabled: enabled, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGrinderAutoSpeed(doseIndex: doseIndex, enabled: enabled, groupIndex: groupIndex) }
         return response
     }
 
@@ -772,9 +792,11 @@ public final class LaMarzoccoMachine {
                 serial: serialNumber, doseMode: doseMode, extractionSeconds: extractionSeconds,
                 doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
         }
-        dashboard = dashboard?.settingGrinderAutoSpeedReference(
-            doseMode: doseMode, extractionSeconds: extractionSeconds,
-            doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        updateBaseDashboard {
+            $0.settingGrinderAutoSpeedReference(
+                doseMode: doseMode, extractionSeconds: extractionSeconds,
+                doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        }
         return response
     }
 
@@ -817,7 +839,11 @@ public final class LaMarzoccoMachine {
             let mode = enabled ? String(format: "%02d:%02d", minutes / 60, minutes % 60) : "Off"
             return try await setAutoStandby(mode: mode)
         }
-        return try await capturing { try await client.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) }
+        return try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setSmartStandby(enabled: enabled, mode: after, minutes: minutes) },
+                cloud: { try await $0.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) })
+        }
     }
 
     /// Set the auto-standby mode string directly (`"HH:MM"` / `"Off"`). Most
@@ -851,8 +877,8 @@ public final class LaMarzoccoMachine {
 
     // MARK: - Model gating
 
-    static let steamLevelModels: Set<Model> = [.lineaMicra, .lineaMiniR]
-    static let steamTemperatureModels: Set<Model> = [.gs3, .gs3AV, .gs3MP, .stradaX]
+    // Steam level / steam temperature gate on the core sets `Model.steamLevelModels` /
+    // `Model.steamTemperatureModels`, shared with the Bluetooth layer.
     static let brewByWeightModels: Set<Model> = [.lineaMini, .lineaMiniR]
     static let stradaXModels: Set<Model> = [.stradaX]
     /// Group-dose commands the GS3 AV also accepts (upstream `@models_supported`).
