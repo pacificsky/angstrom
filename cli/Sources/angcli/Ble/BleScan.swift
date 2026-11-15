@@ -1,13 +1,51 @@
 import ArgumentParser
+import Angstrom
 
-/// `angcli ble scan` (SPEC §10.1). Stub until BT-W2-04 implements it; its options belong to BT-W2-04.
+/// `angcli ble scan [--duration <s>=5] [--all]` (SPEC §10.1).
+///
+/// Without `--all` it lists the La Marzocco machines nearby (`discoverMachines`, name-prefix
+/// filtered). With `--all` it lists every peripheral seen (`scanAll`, unfiltered, SPEC §4.14; H10)
+/// and prints the count to stderr. stdout gets one `{"id","name","rssi"}` line per peripheral.
 struct BleScan: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "scan",
         abstract: "Scan for nearby La Marzocco machines and print one JSON line per peripheral."
     )
 
+    @Option(name: .long, help: "Scan duration in seconds.")
+    var duration: Double = 5
+
+    @Flag(name: .long, help: "List every peripheral seen, not only La Marzocco machines (names may be null).")
+    var all = false
+
+    func validate() throws {
+        guard duration.isFinite, duration > 0 else {
+            throw ValidationError("--duration must be a positive number of seconds.")
+        }
+    }
+
     func run() async throws {
-        throw CLIError("unimplemented: BT-W2-04")
+        let transport = BleSession.makeTransport()
+        let scanDuration = Duration.seconds(duration)
+        let found: [DiscoveredPeripheral]
+        do {
+            if all {
+                found = try await LaMarzoccoBluetoothClient.scanAll(transport: transport, duration: scanDuration)
+            } else {
+                found = try await LaMarzoccoBluetoothClient.discoverMachines(transport: transport, duration: scanDuration)
+            }
+        } catch {
+            throw BleSession.cliError(error)
+        }
+        if all {
+            Stderr.log("\(found.count) peripheral(s) found")
+        }
+        for peripheral in found {
+            if let line = BleOutput.peripheralLine(peripheral) {
+                Stdout.line(line)
+            } else {
+                Stderr.log("Could not encode peripheral \(peripheral.id.rawValue)")
+            }
+        }
     }
 }
