@@ -389,8 +389,9 @@ Decoded lines are `{"event","ts","value"}` with `event` one of `connected`,
 
 The token never reaches your terminal unless you ask for it:
 
-- Every frame the library flags as secret — the authentication write and the
-  token read — prints `**REDACTED**` for **both** `hex` and `text`.
+- Every frame the library flags as secret prints `**REDACTED**` for **both**
+  `hex` and `text`. Today that is the authentication write; the pairing-mode
+  token read (`ble token`) emits no raw frame at all.
 - As a second line of defence, any write to the auth characteristic
   `0d0b7847-e12b-09a8-b04b-8e0922a9abab` and any read of the token
   characteristic `0c0b7847-e12b-09a8-b04b-8e0922a9abab` is redacted whatever the

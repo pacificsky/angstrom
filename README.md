@@ -222,7 +222,10 @@ await ble.disconnect()
 ```
 
 The client connects on the first request, authenticates, and disconnects after
-30 s without a request. Commands return a `BluetoothCommandStatus`.
+30 s without a request. Commands return a `BluetoothCommandStatus`. Releasing a
+client without calling `disconnect()` doesn't leak the link: it is closed and
+the client's event streams end. A `LaMarzoccoMachine` never keeps its Bluetooth
+client alive.
 
 ### The shot counter
 
@@ -319,7 +322,9 @@ the error is thrown. A Bluetooth timeout is thrown without fallback.
 The Bluetooth-only operations (`refreshDashboardFromBluetooth`,
 `refreshModelFromBluetooth`, `startShotCounter`/`stopShotCounter`) never need the
 cloud. Without a Bluetooth client the two refreshes throw
-`.bluetoothConnectionFailed` and `startShotCounter` returns `false`. Every other
+`.bluetoothConnectionFailed` and `startShotCounter` returns `false`. Like every
+other throwing operation, the two refreshes and `startShotCounter` record a
+failure in `lastError` and clear it on success. Every other
 operation is cloud-only and throws `.cloudOnlyFunctionality` without a cloud
 client (also on machines where it is model-gated); `stop()` is a no-op without
 a cloud client.

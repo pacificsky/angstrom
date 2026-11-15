@@ -131,6 +131,17 @@ Creating a client opens nothing. The lifecycle follows `pylamarzocco`:
   including the idle disconnect.
 - ``LaMarzoccoBluetoothClient/disconnect()`` stops the shot counter (if any) and
   closes the link. It never throws and is idempotent.
+- **Releasing the client.** Calling `disconnect()` before you drop the client is
+  still the clean way to end a session, but releasing a client without it does
+  not leak the link: the client's teardown stops its background work (the idle
+  timer, the link watcher and the shot-counter reconnect loop), closes a live
+  link in the background, and finishes every
+  ``LaMarzoccoBluetoothClient/connectionEvents()``,
+  ``LaMarzoccoBluetoothClient/shotCounterEvents()`` and
+  ``LaMarzoccoBluetoothClient/rawFrames()`` stream, so `for await` loops over
+  them end. It emits no final event (no `.disconnected`, no `.gaveUp`). Unlike
+  upstream, a running idle timer doesn't keep the client alive: it holds the
+  client weakly.
 
 The reads are ``LaMarzoccoBluetoothClient/machineMode()``,
 ``LaMarzoccoBluetoothClient/machineCapabilities()``,
@@ -214,9 +225,11 @@ if try await ble.startShotCounter() {           // false: no shot-counter charac
 notification verbatim, plus lifecycle markers, as ``RawBluetoothFrame`` values.
 It costs nothing while nobody listens.
 ``LaMarzoccoBluetoothClient/rawRead(_:)`` returns the verbatim response bytes of
-one read. Frames that carry the token (the authentication write and the token
-read) have ``RawBluetoothFrame/isSecret`` set: redact their bytes before you
-display or log them. The `angcli ble` tool does exactly that.
+one read. A frame that carries the token has ``RawBluetoothFrame/isSecret`` set:
+redact its bytes before you display or log it. Today the only such frame is the
+authentication write. ``LaMarzoccoBluetoothClient/readToken(transport:peripheral:)``
+is static, so it has no client instance and emits nothing on any tap. The
+`angcli ble` tool redacts every secret frame.
 
 ## Errors and fallback
 
@@ -298,3 +311,14 @@ two refreshes throw ``LaMarzoccoError/bluetoothConnectionFailed(_:)`` and
 `startShotCounter()` returns `false`. Every other operation is cloud-only and
 throws ``LaMarzoccoError/cloudOnlyFunctionality`` without a cloud client, even
 where it is also model-gated. `stop()` is a no-op without a cloud client.
+
+The two Bluetooth refreshes and `startShotCounter()` record a failure in the
+machine's `lastError` (the missing-client error included) and clear it on
+success, like every other throwing operation on the machine. A failed
+`refreshDashboardFromBluetooth()` leaves `dashboard` unchanged, apart from a
+model it already learned from the capabilities read.
+
+The machine never keeps its Bluetooth client alive: its long-lived tasks hold
+only the client's event streams. When the app releases the machine and its own
+references to the client, the client is released too, which closes its link
+(see "Releasing the client" above).

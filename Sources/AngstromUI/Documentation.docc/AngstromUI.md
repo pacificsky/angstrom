@@ -91,8 +91,16 @@ also model-gated.
 reads the machine mode, plumb-in state, water tank and boilers over Bluetooth and
 updates the machine status, coffee and steam boiler, and no-water widgets of
 `dashboard`. When the model is unknown it reads the machine's capabilities first.
-A failed read changes nothing and never falls back to the cloud. It doesn't stamp
+A failed read leaves `dashboard` unchanged (apart from a model already learned
+from the capabilities read) and never falls back to the cloud. It doesn't stamp
 `lastUpdateAt`, which stays a cloud freshness signal.
+
+Like every other throwing operation on the machine,
+``LaMarzoccoMachine/refreshDashboardFromBluetooth()``,
+``LaMarzoccoMachine/refreshModelFromBluetooth()`` and
+``LaMarzoccoMachine/startShotCounter()`` record a failure in `lastError` before
+rethrowing it (including the missing-client error), and clear `lastError` on
+success. A `false` from `startShotCounter()` counts as a success.
 
 **The shot counter.** ``LaMarzoccoMachine/startShotCounter()`` subscribes to the
 machine's real-time brewing notifications. It returns `false` without a Bluetooth
@@ -131,6 +139,13 @@ failed logins with a wrong token; the error is also stored in `lastError`).
 an **authenticated** Bluetooth link is up. It is independent of the websocket's
 `isConnected`. ``LaMarzoccoMachine/bluetoothConnectionEvents()`` exposes the
 underlying `.connected`/`.disconnected` transitions.
+
+**Lifetime.** The machine's long-lived tasks (the connection observer and the
+shot-counter listener) hold only the client's event streams, never the client
+itself, so a released machine does not keep its Bluetooth client alive. Once the
+app also drops its own references, the client is released, its link is closed
+and its event streams end (see the Bluetooth article in the `Angstrom`
+documentation).
 
 ## Topics
 
