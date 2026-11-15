@@ -16,11 +16,12 @@ Requires macOS 14+ / iOS 17+.
 Add the package to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/pacificsky/angstrom.git", from: "1.0.0")
+.package(url: "https://github.com/pacificsky/angstrom.git", from: "2.0.0")
 ```
 
 Then depend on `"Angstrom"` for the stateless core client, and/or `"AngstromUI"`
-for the observable device layer.
+for the observable device layer. Add `"AngstromBluetooth"` only if you talk to
+the machine over Bluetooth (see <doc:Bluetooth>).
 
 ### Create an identity, once
 
@@ -99,3 +100,10 @@ product — a `@MainActor @Observable` device layer that retains
 `dashboard`/`settings`/`schedule`, merges live pushes for you, and applies
 optimistic local updates on every command. The core client remains usable on its
 own for CLI and server use.
+
+### Next: Bluetooth
+
+When the machine is nearby, Angstrom can also talk to it directly over Bluetooth:
+lazy authenticated reads and commands, and the real-time shot counter. The
+Bluetooth token, peripheral identity, lifecycle, errors and app requirements are
+covered in <doc:Bluetooth>.
