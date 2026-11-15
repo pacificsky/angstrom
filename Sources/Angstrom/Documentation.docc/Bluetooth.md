@@ -134,14 +134,18 @@ Creating a client opens nothing. The lifecycle follows `pylamarzocco`:
 - **Releasing the client.** Calling `disconnect()` before you drop the client is
   still the clean way to end a session, but releasing a client without it does
   not leak the link: the client's teardown stops its background work (the idle
-  timer, the link watcher and the shot-counter reconnect loop), closes a live
+  timer and the link watcher), closes a live
   link in the background, and finishes every
   ``LaMarzoccoBluetoothClient/connectionEvents()``,
   ``LaMarzoccoBluetoothClient/shotCounterEvents()`` and
   ``LaMarzoccoBluetoothClient/rawFrames()`` stream, so `for await` loops over
   them end. It emits no final event (no `.disconnected`, no `.gaveUp`). Unlike
   upstream, a running idle timer doesn't keep the client alive: it holds the
-  client weakly.
+  client weakly. One exception: while the shot counter is reconnecting after a
+  lost link, the reconnect loop keeps the client alive (as upstream's does)
+  until it resubscribes or gives up. Call
+  ``LaMarzoccoBluetoothClient/stopShotCounter()`` or `disconnect()` before you
+  drop a client whose shot counter is running.
 
 The reads are ``LaMarzoccoBluetoothClient/machineMode()``,
 ``LaMarzoccoBluetoothClient/machineCapabilities()``,
@@ -318,7 +322,7 @@ success, like every other throwing operation on the machine. A failed
 `refreshDashboardFromBluetooth()` leaves `dashboard` unchanged, apart from a
 model it already learned from the capabilities read.
 
-The machine never keeps its Bluetooth client alive: its long-lived tasks hold
-only the client's event streams. When the app releases the machine and its own
+A released machine doesn't keep its Bluetooth client alive: its long-lived
+tasks hold only the client's event streams. When the app releases the machine and its own
 references to the client, the client is released too, which closes its link
 (see "Releasing the client" above).

@@ -371,6 +371,11 @@ final class ShotCounterOverlayTests: XCTestCase {
         try await rig.deliver(.telemetry(BluetoothMachineTelemetry(machineMode: .eco)))
         XCTAssertEqual(machine.dashboard?.machineStatus?.status, .brewing)
         XCTAssertEqual(machine.baseDashboard?.machineStatus?.status, .eco)
+        // §4.19: the mode is written into the base, not the rendered dashboard, so the overlay's start
+        // time never leaks into the base (or into a snapshot).
+        XCTAssertNotNil(machine.dashboard?.machineStatus?.brewingStartTime, "premise: the overlay renders a start time")
+        XCTAssertNil(machine.baseDashboard?.machineStatus?.brewingStartTime)
+        XCTAssertNil(machine.snapshot.dashboard?.machineStatus?.brewingStartTime)
 
         try await rig.deliver(.brewing(update(.flushed)))
         XCTAssertEqual(machine.dashboard?.machineStatus?.mode, .eco)
@@ -947,13 +952,6 @@ final class ShotCounterOverlayTests: XCTestCase {
             listener = try XCTUnwrap(machine.shotCounterTask)
             expiry = try XCTUnwrap(machine.brewingExpiryTask)
             XCTAssertNotNil(machine.bluetoothBrewingUpdate)
-
-            // Isolate the shot-counter tasks: end the machine's connection observer (§6.16, not part of
-            // the shot counter), whose closure captures the client for the task's life — a BT-W3-06 defect
-            // proven by testConnectionObserverDoesNotRetainClient below.
-            let observer = try XCTUnwrap(machine.bluetoothConnectionTask)
-            observer.cancel()
-            await observer.value
         }
 
         // Release the machine and its client together, without stopping anything.
@@ -974,15 +972,7 @@ final class ShotCounterOverlayTests: XCTestCase {
     /// Angstrom-only: §5.5 — the machine's connection observer holds only the event stream, never the
     /// Bluetooth client: releasing the machine together with its client, with the observer alive and not
     /// cancelled, deallocates the client, whose teardown then finishes the stream and ends the observer.
-    /// (The regression test for the review finding behind the explicit cancel in the test above.)
     func testConnectionObserverDoesNotRetainClient() async throws {
-        try XCTSkipIf(true, """
-            BLOCKED-BY BT-W3-06: startObservingBluetoothConnection() captures the Bluetooth client strongly \
-            in bluetoothConnectionTask for the task's life (LaMarzoccoMachine+BluetoothConnection.swift:30), \
-            so a released machine and client never deallocate (SPEC §5.5 isolation table). \
-            BLOCKED-BY BT-W1-09: LaMarzoccoBluetoothClient has no deinit teardown, so a released client \
-            never finishes its connectionEvents() continuations and the observer never ends (SPEC §5.5 Lifetime).
-            """)
         var harness: BluetoothMachineHarness? = BluetoothMachineHarness(
             cloud: false, bluetooth: true, settingResponses: bluetoothDashboardReplies(mode: "BrewingMode"))
         weak var weakMachine: LaMarzoccoMachine?

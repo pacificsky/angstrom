@@ -20,7 +20,9 @@
 > operations and `startShotCounter()` record and clear `lastError`), §4.13 (vector connect counts
 > are upstream's), §9.4 (C37/C38 line). From the Wave 4 verify packages: §5.5 (lifetime: client
 > `deinit` teardown; long-lived machine tasks do not retain the client), §5.7 (token-read frames),
-> §12 D5 (sub-items in order), wording in §1.4, §2.1 and §4.15.
+> §12 D5 (sub-items in order), wording in §1.4, §2.1 and §4.15. From the Wave 4 fix reviews: §5.5
+> (a running reconnect loop retains the client), §4.15 (the connection observer seeds from
+> `isConnected` after registering).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -1039,7 +1041,11 @@ sleeper.
 - **Model gating** uses `model` as today (dashboard ?? settings ?? schedule). If the model is
   unknown, `requireModel` throws `.unsupportedModel`. There is no silent Linea Micra default (D17).
 - If a BLE client is present, `init` starts observing `bluetooth.connectionEvents()` and sets
-  `isBluetoothConnected` (`startObservingBluetoothConnection()`, frozen).
+  `isBluetoothConnected` (`startObservingBluetoothConnection()`, frozen). The observer registers on
+  `connectionEvents()` first and then seeds `isBluetoothConnected` from `bluetooth.isConnected`, in
+  that order, so a machine built on an already-connected client is right from the start and a
+  transition between the two steps is not lost (parity: upstream's `bluetooth_connected` reads the
+  client's live state, `THING:109-114`).
 
 ### 4.16 BLE-first commands with cloud fallback (`MACH:983-1049`)
 
@@ -1408,7 +1414,10 @@ the link or park its consumers: the actor's `deinit` cancels `idleTask`, `linkWa
 finishes every listener continuation (`connectionEvents()`, `shotCounterEvents()`, `rawFrames()`),
 so consumers' `for await` loops end. No event is emitted from `deinit`. (Upstream's idle task keeps
 the client alive until it disconnects; the Swift tasks hold the client weakly, so the teardown has
-to be explicit.)
+to be explicit.) **Exception (parity):** while the shot-counter reconnect loop runs (§4.13), its
+task holds the client, as upstream's does. A client released in that state stays alive and keeps
+retrying until the loop resubscribes or gives up; only then can `deinit` run. Callers stop the shot
+counter or call `disconnect()` before releasing a client, and the user docs say so.
 
 Rules: no CB object crosses an isolation boundary (only `Data`, `String`, UUIDs, enums). There is no
 `Task {}` hop inside a delegate callback (ordering). There is no `Task.immediate` dependency: the

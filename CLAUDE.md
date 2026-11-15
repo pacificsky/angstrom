@@ -148,7 +148,8 @@ unit-tested in CI with fakes and cloud-only consumers never link CoreBluetooth.
   early (D14). The idle task and link watcher hold the actor weakly, so the actor's `deinit` does
   the teardown when the client is released without `disconnect()`: it cancels the idle, link-watcher
   and reconnect tasks, closes a live link fire-and-forget, and finishes every listener stream
-  (`connectionEvents()`, `shotCounterEvents()`, `rawFrames()`) without emitting an event.
+  (`connectionEvents()`, `shotCounterEvents()`, `rawFrames()`) without emitting an event. A
+  running reconnect loop holds the client (upstream parity), so `deinit` waits for it to end.
 - **`Dashboard+Bluetooth.swift`** — pure transforms: `upserting`, `removingWidgets(code:)`,
   `settingMachineState`, `applyingBluetoothState(_:model:)` (upstream's
   `get_dashboard_from_bluetooth` widget synthesis) and `overlayingBluetoothBrewing(_:)` (the

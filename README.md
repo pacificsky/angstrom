@@ -224,8 +224,9 @@ await ble.disconnect()
 The client connects on the first request, authenticates, and disconnects after
 30 s without a request. Commands return a `BluetoothCommandStatus`. Releasing a
 client without calling `disconnect()` doesn't leak the link: it is closed and
-the client's event streams end. A `LaMarzoccoMachine` never keeps its Bluetooth
-client alive.
+the client's event streams end. (Stop a running shot counter first: while it is
+reconnecting after a lost link, its reconnect loop keeps the client alive.) A
+released `LaMarzoccoMachine` doesn't keep its Bluetooth client alive.
 
 ### The shot counter
 
