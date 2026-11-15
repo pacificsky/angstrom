@@ -681,15 +681,82 @@ final class ShotCounterOverlayTests: XCTestCase {
         XCTAssertNil(machine.shotCounterTask)
         XCTAssertEqual(harness.central.connectCount, 4)
 
-        // No listener is left: a later start installs a new one and works.
+        // No listener is left: a later start installs a new one and works, and (§4.15) its success
+        // clears the `lastError` the give-up recorded.
         harness.central.makeLink = goodLink
         let restarted = try await machine.startShotCounter()
         XCTAssertTrue(restarted)
         XCTAssertTrue(machine.isShotCounterActive)
         XCTAssertNotNil(machine.shotCounterTask)
+        XCTAssertNil(machine.lastError)
 
         await machine.stopShotCounter()
         log.cancel()
+    }
+
+    /// Angstrom-only: §4.15 — `startShotCounter()` runs inside `capturing`: a thrown start failure is
+    /// recorded in `lastError` before it is rethrown, and every successful return (`true`, or `false`
+    /// for an unsupported machine or a missing Bluetooth client) clears a previously recorded error.
+    func testStartRecordsAndClearsLastError() async throws {
+        let previous = LaMarzoccoError.bluetoothAuthenticationFailed
+
+        // A start that fails to connect: the rethrown error is the recorded one.
+        let failing = BluetoothMachineHarness(failure: .connect)
+        failing.machine.lastError = previous
+        var thrown: Error?
+        do {
+            try await failing.machine.startShotCounter()
+            XCTFail("expected the connect failure to be rethrown")
+        } catch {
+            thrown = error
+        }
+        let thrownError = try XCTUnwrap(thrown as? LaMarzoccoError)
+        guard case .bluetoothConnectionFailed = thrownError else {
+            return XCTFail("expected .bluetoothConnectionFailed, got \(thrownError)")
+        }
+        XCTAssertEqual(failing.machine.lastError as? LaMarzoccoError, thrownError)
+        XCTAssertNil(failing.machine.shotCounterTask)
+        XCTAssertFalse(failing.machine.isShotCounterActive)
+
+        // A successful start (`true`) clears a previously recorded error.
+        let harness = BluetoothMachineHarness()
+        let machine = harness.machine
+        machine.lastError = previous
+        let started = try await machine.startShotCounter()
+        XCTAssertTrue(started)
+        XCTAssertNil(machine.lastError)
+        XCTAssertTrue(machine.isShotCounterActive)
+
+        // A later `.gaveUp(e)` still records `e`.
+        let log = EventLog(machine.bluetoothEvents())
+        machine.handleShotCounterEvent(.gaveUp(.bluetoothTimedOut("test")))
+        await fulfillment(of: [log.expectation(count: 1)], timeout: hangGuard)
+        XCTAssertEqual(log.events, [.shotCounterStopped(.bluetoothTimedOut("test"))])
+        XCTAssertEqual(machine.lastError as? LaMarzoccoError, .bluetoothTimedOut("test"))
+        XCTAssertFalse(machine.isShotCounterActive)
+        await machine.stopShotCounter()
+        log.cancel()
+
+        // `false` for an unsupported machine (no shot-counter characteristic) clears it too.
+        let unsupported = BluetoothMachineHarness()
+        let missing = unsupported.central.makeLink
+        unsupported.central.makeLink = { [shotCounter] in
+            let link = missing()
+            link.present.remove(shotCounter)
+            link.presentAfterRefresh = link.present
+            return link
+        }
+        unsupported.machine.lastError = previous
+        let unsupportedStarted = try await unsupported.machine.startShotCounter()
+        XCTAssertFalse(unsupportedStarted)
+        XCTAssertNil(unsupported.machine.lastError)
+
+        // `false` without a Bluetooth client clears it too.
+        let cloudOnly = BluetoothMachineHarness(bluetooth: false)
+        cloudOnly.machine.lastError = previous
+        let cloudOnlyStarted = try await cloudOnly.machine.startShotCounter()
+        XCTAssertFalse(cloudOnlyStarted)
+        XCTAssertNil(cloudOnly.machine.lastError)
     }
 
     /// Angstrom-only: D12 — snapshots persist the base dashboard, never the overlay's `Brewing` or BLE start time

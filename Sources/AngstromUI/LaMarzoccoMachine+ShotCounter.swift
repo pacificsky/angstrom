@@ -12,49 +12,54 @@ extension LaMarzoccoMachine {
     /// Not gated on the dashboard's `shotCounterSupported` flag or on the model.
     ///
     /// - Returns: `false` without a Bluetooth client, or when the machine has no shot counter.
-    /// - Throws: the Bluetooth client's connect/authentication errors.
+    /// - Throws: the Bluetooth client's connect/authentication errors, also recorded in ``lastError``;
+    ///   a successful return (`false` included) clears ``lastError``.
     @discardableResult
     public func startShotCounter() async throws -> Bool {
-        guard let bluetooth else { return false }
-        let listener: Task<Void, Never>
-        if let running = shotCounterTask {
-            listener = running
-        } else {
-            // Subscribe BEFORE starting, so the `.subscribed` of this start is not missed.
-            let events = await bluetooth.shotCounterEvents()
+        // Inside `capturing` (§4.15): a thrown start failure is recorded in `lastError` before it is
+        // rethrown; a successful return (`false` included) clears it.
+        try await capturing {
+            guard let bluetooth else { return false }
+            let listener: Task<Void, Never>
             if let running = shotCounterTask {
-                // An overlapping start installed its listener while this one was suspended (MainActor
-                // reentrancy): reuse it. Dropping `events` terminates it, which unregisters it from
-                // the client, so every event is handled once and a stop silences the only listener.
                 listener = running
             } else {
-                listener = Task { [weak self] in
-                    for await event in events {
-                        // A cancelled listener drops the events still buffered in its stream: the
-                        // `.unsubscribed` of `stopShotCounter()` (upstream `_stopping_shot_counter`).
-                        guard !Task.isCancelled, let self else { return }
-                        self.handleShotCounterEvent(event)
+                // Subscribe BEFORE starting, so the `.subscribed` of this start is not missed.
+                let events = await bluetooth.shotCounterEvents()
+                if let running = shotCounterTask {
+                    // An overlapping start installed its listener while this one was suspended (MainActor
+                    // reentrancy): reuse it. Dropping `events` terminates it, which unregisters it from
+                    // the client, so every event is handled once and a stop silences the only listener.
+                    listener = running
+                } else {
+                    listener = Task { [weak self] in
+                        for await event in events {
+                            // A cancelled listener drops the events still buffered in its stream: the
+                            // `.unsubscribed` of `stopShotCounter()` (upstream `_stopping_shot_counter`).
+                            guard !Task.isCancelled, let self else { return }
+                            self.handleShotCounterEvent(event)
+                        }
                     }
+                    shotCounterTask = listener
                 }
-                shotCounterTask = listener
             }
-        }
 
-        let started: Bool
-        do {
-            started = try await bluetooth.startShotCounter()
-        } catch {
-            abandonShotCounterListener(listener)
-            throw error
+            let started: Bool
+            do {
+                started = try await bluetooth.startShotCounter()
+            } catch {
+                abandonShotCounterListener(listener)
+                throw error
+            }
+            guard started else {
+                abandonShotCounterListener(listener)
+                return false
+            }
+            // The client's live state (upstream's property reads it): a stop that raced this start leaves
+            // it false.
+            isShotCounterActive = await bluetooth.shotCounterActive
+            return true
         }
-        guard started else {
-            abandonShotCounterListener(listener)
-            return false
-        }
-        // The client's live state (upstream's property reads it): a stop that raced this start leaves
-        // it false.
-        isShotCounterActive = await bluetooth.shotCounterActive
-        return true
     }
 
     /// Stop the Bluetooth shot counter (upstream `disconnect_bluetooth_shot_counter`).
