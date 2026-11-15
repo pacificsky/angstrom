@@ -1001,6 +1001,127 @@ final class BluetoothClientCoreTests: XCTestCase {
         }
     }
 
+    // MARK: Lifetime
+
+    /// Angstrom-only: §5.5 Lifetime — a connected client released without disconnect() closes its link (once) and deallocates
+    func testReleasedClientClosesLinkAndDeallocates() async throws {
+        let central = ScriptedCentral(FakeBluetoothCentral())
+        let sleeper = ManualBluetoothSleeper()
+        let observed = ObservedLink(.laMarzocco(token: "token"))
+        central.enqueue(observed)
+        var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+            transport: BluetoothTransport(central: central, sleeper: sleeper), peripheral: .fake,
+            token: BluetoothAuthToken("token"))
+        _ = try await client?.ensureConnected()
+        await sleeper.waitForPending(.idleDisconnect, count: 1)
+        let released = Weak(client)
+
+        client = nil
+
+        await fulfillment(of: [observed.disconnected], timeout: 5)
+        XCTAssertNil(released.value, "the client deallocated")
+        XCTAssertEqual(observed.inner.recordedOps,
+                       [.discover(refresh: false), .write(auth, Data("token".utf8)), .read(auth), .disconnect])
+        XCTAssertEqual(central.calls.filter { $0 == "connect" }.count, 1, "release never reconnects")
+    }
+
+    /// Angstrom-only: §5.5 Lifetime — consumers parked on connectionEvents() / rawFrames() / shotCounterEvents() end their loops when the client is released; deinit emits nothing
+    func testReleasedClientEndsListenerStreams() async throws {
+        // Connected client.
+        do {
+            let central = FakeBluetoothCentral()
+            let sleeper = ManualBluetoothSleeper()
+            var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+                transport: .fake(central, sleeper: sleeper), peripheral: .fake, token: BluetoothAuthToken("token"))
+            let connection = collectUntilFinished(try await XCTUnwrap(client).connectionEvents(), "connectionEvents")
+            let raw = collectUntilFinished(try await XCTUnwrap(client).rawFrames(), "rawFrames")
+            let shots = collectUntilFinished(try await XCTUnwrap(client).shotCounterEvents(), "shotCounterEvents")
+            _ = try await client?.ensureConnected()
+            await sleeper.waitForPending(.idleDisconnect, count: 1)
+            let released = Weak(client)
+
+            client = nil
+
+            await fulfillment(of: [connection.finished, raw.finished, shots.finished], timeout: 5)
+            XCTAssertNil(released.value)
+            let connectionSeen = await connection.values()
+            XCTAssertEqual(connectionSeen, [.connected], "no .disconnected from deinit")
+            let markers = await raw.values().filter { $0.kind == .event }.map { String(decoding: $0.data, as: UTF8.self) }
+            XCTAssertEqual(markers, ["[connecting]", "[connected]", "[authenticated]"], "no [disconnected] from deinit")
+            let shotsSeen = await shots.values()
+            XCTAssertTrue(shotsSeen.isEmpty, "\(shotsSeen)")
+        }
+
+        // Never-connected client: the streams end too, and nothing touches the transport.
+        do {
+            let central = FakeBluetoothCentral()
+            var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+                transport: .fake(central, sleeper: ManualBluetoothSleeper()), peripheral: .fake,
+                token: BluetoothAuthToken("token"))
+            let connection = collectUntilFinished(try await XCTUnwrap(client).connectionEvents(), "connectionEvents")
+            let raw = collectUntilFinished(try await XCTUnwrap(client).rawFrames(), "rawFrames")
+
+            client = nil
+
+            await fulfillment(of: [connection.finished, raw.finished], timeout: 5)
+            let connectionSeen = await connection.values()
+            XCTAssertEqual(connectionSeen, [])
+            let rawSeen = await raw.values()
+            XCTAssertEqual(rawSeen, [])
+            XCTAssertEqual(central.connectCount, 0)
+        }
+    }
+
+    /// Angstrom-only: §5.5 Lifetime — releasing a client with a pending idle sleep and a running link watcher cancels both; nothing stays parked on the sleeper
+    func testReleasedClientCancelsIdleTaskAndLinkWatcher() async throws {
+        let central = ScriptedCentral(FakeBluetoothCentral())
+        let sleeper = ManualBluetoothSleeper()
+        let observed = ObservedLink(.laMarzocco(token: "token"))
+        central.enqueue(observed)
+        var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+            transport: BluetoothTransport(central: central, sleeper: sleeper), peripheral: .fake,
+            token: BluetoothAuthToken("token"))
+        _ = try await client?.ensureConnected()
+        await sleeper.waitForPending(.idleDisconnect, count: 1)
+        let watching = await client?.inspect { $0.linkWatcher != nil && $0.idleTask != nil }
+        XCTAssertEqual(watching, true)
+        let released = Weak(client)
+
+        client = nil
+
+        await fulfillment(of: [observed.watcherEnded, observed.disconnected], timeout: 5)
+        XCTAssertNil(released.value)
+        XCTAssertEqual(sleeper.pendingCount(.idleDisconnect), 0, "the idle sleep was cancelled, not left parked")
+        XCTAssertEqual(sleeper.startedCount(.idleDisconnect), 1, "no new idle sleep was started")
+        XCTAssertEqual(sleeper.requested(.connectBackoff), [])
+    }
+
+    /// Angstrom-only: §5.5 Lifetime — a client disconnected normally and then released does not touch the closed link again
+    func testDisconnectedClientReleaseIsQuiet() async throws {
+        let central = ScriptedCentral(FakeBluetoothCentral())
+        let sleeper = ManualBluetoothSleeper()
+        let observed = ObservedLink(.laMarzocco(token: "token"))
+        central.enqueue(observed)
+        var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+            transport: BluetoothTransport(central: central, sleeper: sleeper), peripheral: .fake,
+            token: BluetoothAuthToken("token"))
+        _ = try await client?.ensureConnected()
+        await client?.disconnect()
+        await fulfillment(of: [observed.disconnected, observed.watcherEnded], timeout: 5)
+        let connection = collectUntilFinished(try await XCTUnwrap(client).connectionEvents(), "connectionEvents")
+        let released = Weak(client)
+
+        client = nil
+
+        await fulfillment(of: [connection.finished], timeout: 5)
+        XCTAssertNil(released.value)
+        let seen = await connection.values()
+        XCTAssertEqual(seen, [], "release after disconnect reports nothing")
+        XCTAssertEqual(observed.inner.recordedOps.filter { $0 == .disconnect }.count, 1, "the link is closed exactly once")
+        XCTAssertEqual(observed.disconnectCount, 1)
+        XCTAssertEqual(sleeper.pendingCount(.idleDisconnect), 0)
+    }
+
     // MARK: Raw tap
 
     /// Angstrom-only: §5.7 — lifecycle markers in order, verbatim directional frames stamped by `now`; nothing (not even `now()`) without a listener
@@ -1188,6 +1309,36 @@ final class BluetoothClientCoreTests: XCTestCase {
         }.value
     }
 
+    /// A consumer parked on a stream in a task that holds only the stream (never the client).
+    private struct Collector<Element: Sendable> {
+        let task: Task<[Element], Never>
+        /// Fulfilled only when the stream itself finishes (not when `values()` cancels the reader).
+        let finished: XCTestExpectation
+
+        /// What the reader saw. Cancels it first, so a stream that never finished fails the test
+        /// (through `finished`) instead of hanging here.
+        func values() async -> [Element] {
+            task.cancel()
+            return await task.value
+        }
+    }
+
+    private func collectUntilFinished<Element: Sendable>(_ stream: AsyncStream<Element>,
+                                                         _ label: String) -> Collector<Element> {
+        let finished = XCTestExpectation(description: "\(label) finished")
+        let task = Task { () -> [Element] in
+            var seen: [Element] = []
+            for await element in stream {
+                seen.append(element)
+            }
+            if !Task.isCancelled {
+                finished.fulfill()
+            }
+            return seen
+        }
+        return Collector(task: task, finished: finished)
+    }
+
     /// Iterates `stream` until `match` (hang guard: 5 s); returns every element consumed, the match last.
     private func waitFor<Element: Sendable>(_ stream: AsyncStream<Element>,
                                             file: StaticString = #filePath, line: UInt = #line,
@@ -1285,6 +1436,13 @@ private final class Locked<Value>: @unchecked Sendable {
         defer { lock.unlock() }
         return body(&storage)
     }
+}
+
+/// A weak reference, to observe that a released client deallocated.
+private final class Weak<Object: AnyObject>: @unchecked Sendable {
+    weak var value: Object?
+
+    init(_ value: Object?) { self.value = value }
 }
 
 /// One-shot gate: `wait()` suspends until `open()`; afterwards it returns at once.
@@ -1407,6 +1565,69 @@ private final class SilentlyDyingLink: BluetoothLink, @unchecked Sendable {
     func unsubscribe(_ characteristic: GATTUUID) async { await inner.unsubscribe(characteristic) }
 
     func disconnect() async { await inner.disconnect() }
+
+    func attMTU() async -> Int? { await inner.attMTU() }
+
+    func gattTable(timeout: Duration) async throws -> [BluetoothGATTService] {
+        try await inner.gattTable(timeout: timeout)
+    }
+}
+
+/// A live link that reports when it is closed and when its event stream stops being iterated (the
+/// client's link watcher was cancelled). Its own events stay silent, so only the client's teardown
+/// (not a `.disconnected` event) can end the watcher.
+private final class ObservedLink: BluetoothLink, @unchecked Sendable {
+    let inner: FakeBluetoothLink
+    let events: AsyncStream<LinkEvent>
+    let disconnected = XCTestExpectation(description: "link disconnected")
+    let watcherEnded = XCTestExpectation(description: "link watcher ended")
+    private let continuation: AsyncStream<LinkEvent>.Continuation
+    private let lock = NSLock()
+    private var disconnects = 0
+
+    init(_ inner: FakeBluetoothLink) {
+        self.inner = inner
+        (events, continuation) = AsyncStream.makeStream(of: LinkEvent.self, bufferingPolicy: .unbounded)
+        let ended = watcherEnded
+        continuation.onTermination = { termination in
+            if case .cancelled = termination { ended.fulfill() }
+        }
+    }
+
+    deinit { continuation.finish() }
+
+    var disconnectCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return disconnects
+    }
+
+    var peripheralID: BluetoothPeripheralID { inner.peripheralID }
+
+    func discover(_ wanted: Set<GATTUUID>, refresh: Bool, timeout: Duration) async throws -> Set<GATTUUID> {
+        try await inner.discover(wanted, refresh: refresh, timeout: timeout)
+    }
+
+    func read(_ characteristic: GATTUUID, timeout: Duration) async throws -> Data {
+        try await inner.read(characteristic, timeout: timeout)
+    }
+
+    func write(_ data: Data, to characteristic: GATTUUID, withResponse: Bool, timeout: Duration) async throws {
+        try await inner.write(data, to: characteristic, withResponse: withResponse, timeout: timeout)
+    }
+
+    func subscribe(_ characteristic: GATTUUID, timeout: Duration) async throws {
+        try await inner.subscribe(characteristic, timeout: timeout)
+    }
+
+    func unsubscribe(_ characteristic: GATTUUID) async { await inner.unsubscribe(characteristic) }
+
+    /// Recorded by the inner fake first, so `disconnected` fires after `.disconnect` is in `recordedOps`.
+    func disconnect() async {
+        await inner.disconnect()
+        lock.withLock { disconnects += 1 }
+        disconnected.fulfill()
+    }
 
     func attMTU() async -> Int? { await inner.attMTU() }
 
