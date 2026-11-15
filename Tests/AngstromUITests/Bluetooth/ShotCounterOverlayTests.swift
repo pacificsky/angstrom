@@ -786,6 +786,55 @@ final class ShotCounterOverlayTests: XCTestCase {
         await rig.finish()
     }
 
+    /// Angstrom-only: §4.19 / §6.16 — overlapping `startShotCounter()` calls (MainActor reentrancy
+    /// across the `shotCounterEvents()` suspension) install one listener: every event is handled
+    /// once, and a stop silences it (no leaked listener emits `.brewingCleared` for the stop).
+    func testOverlappingStartsInstallOneListener() async throws {
+        let harness = BluetoothMachineHarness(seed: .custom(dashboard(status: machineStatus(.poweredOn))))
+        let machine = harness.machine
+        let client = try XCTUnwrap(harness.bluetooth)
+        let log = EventLog(machine.bluetoothEvents())
+
+        async let first = machine.startShotCounter()
+        async let second = machine.startShotCounter()
+        let (firstStarted, secondStarted) = try await (first, second)
+        XCTAssertTrue(firstStarted)
+        XCTAssertTrue(secondStarted)
+        XCTAssertTrue(machine.isShotCounterActive)
+        XCTAssertNotNil(machine.shotCounterTask)
+
+        // The losing start's stream was dropped, which unregisters it from the client (the removal
+        // hops to the client actor asynchronously; bounded by yields, not by wall-clock time).
+        var listeners = await client.shotCounterListeners.count
+        for _ in 0..<1_000 where listeners != 1 {
+            await Task.yield()
+            listeners = await client.shotCounterListeners.count
+        }
+        XCTAssertEqual(listeners, 1)
+
+        // One emission per event.
+        let telemetry = BluetoothMachineTelemetry(coffeeBoilerTemperature: 93)
+        await client.emitShotCounter(.telemetry(telemetry))
+        await fulfillment(of: [log.expectation(count: 1)], timeout: hangGuard)
+        let brewing = update(.brewing, timer: 3)
+        await client.emitShotCounter(.brewing(brewing))
+        await fulfillment(of: [log.expectation(count: 2)], timeout: hangGuard)
+
+        // The stop cancels the only listener: its `.unsubscribed` is never handled.
+        let listener = try XCTUnwrap(machine.shotCounterTask)
+        await machine.stopShotCounter()
+        await listener.value
+        XCTAssertNil(machine.shotCounterTask)
+        XCTAssertFalse(machine.isShotCounterActive)
+
+        // A sentinel proves nothing was emitted twice or after the stop (events are ordered).
+        let sentinel = BluetoothMachineTelemetry(sleep: "sentinel")
+        machine.handleShotCounterEvent(.telemetry(sentinel))
+        await fulfillment(of: [log.expectation(count: 3)], timeout: hangGuard)
+        XCTAssertEqual(log.events, [.telemetry(telemetry), .brewing(brewing), .telemetry(sentinel)])
+        log.cancel()
+    }
+
     // MARK: - Helpers
 
     /// A started shot counter on a harness machine, with a gate-controlled expiry and an event log.
