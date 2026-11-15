@@ -347,7 +347,6 @@ final class ShotCounterNotificationDecoderTests: XCTestCase {
     /// Angstrom-only: §3.10 — a hex-float string time (`"0x1p3"`, which Swift's `Double(String)` accepts
     /// and Python's `float()` rejects) drops the notification.
     func testHexFloatStringTimeDropped() throws {
-        if true { throw XCTSkip("BLOCKED-BY BT-W1-01: BluetoothWireCoercion.optionalDouble accepts hex-float strings (\"0x1p3\" → 8.0); SPEC §3.10 requires an error when the string contains x or X") }  // the fix job deletes this line
         for value in ["0x1p3", "0X1P3", " 0x10 ", "-0x1.8p1"] {
             XCTAssertNil(decode(#"{"BrewingUpdateGroup1Time":"\#(value)","BrewingUpdateGroup1Ev":true}"#), value)
             XCTAssertNil(decode(#"{"CoffeeBoiler1UpdateTemperature":"\#(value)"}"#), value)

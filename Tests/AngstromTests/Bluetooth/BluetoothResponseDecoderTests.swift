@@ -365,7 +365,6 @@ final class BluetoothResponseDecoderTests: XCTestCase {
 
     /// Angstrom-only: §3.10 — a hex-float string boiler target ("0x1p3") is `.decoding` (Python `float()` raises)
     func testHexFloatBoilerTargetRejected() throws {
-        try XCTSkipIf(true, "BLOCKED-BY BT-W1-01: BluetoothWireCoercion.optionalDouble accepts hex-float strings (\"0x1p3\" → 8.0); SPEC §3.10 requires an error when s contains x or X")
         // SPEC §3.10 double rule: "error … if `s` contains `x` or `X`" (Swift's `Double(String)` accepts
         // hex floats such as "0x1p3" = 8.0; Python's `float()` raises on them: parity).
         assertDecoding(try BluetoothResponseDecoder.boilers(Self.boil(steamTarget: #""0x1p3""#)), context: "boilers")
