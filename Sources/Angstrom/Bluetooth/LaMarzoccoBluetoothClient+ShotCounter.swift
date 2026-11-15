@@ -63,6 +63,12 @@ extension LaMarzoccoBluetoothClient {
         for refresh in [false, true] {
             _ = try await ensureConnected(refresh: refresh)
             await acquire(.connection)
+            // The gate wait is not cancellable (upstream's lock would raise `CancelledError` here): a
+            // cancelled caller (the reconnect loop after a stop) must not subscribe or disconnect.
+            if Task.isCancelled {
+                release(.connection)
+                throw CancellationError()
+            }
             let outcome: SubscribeOutcome
             do {
                 outcome = try await subscribeHoldingGate(refresh: refresh)
@@ -171,8 +177,8 @@ extension LaMarzoccoBluetoothClient {
                 result = .failure(error)
             }
             // Only `disableShotCounter()` cancels this task, and it has already cleaned up. Upstream's
-            // `CancelledError` would surface at the next await; the connection gate is not cancellable
-            // here, so the attempt may have run to its end first.
+            // `CancelledError` would surface at the next await; the gate waits are not cancellable, so
+            // the attempt checks after each of them and may have run to its end first.
             if Task.isCancelled {
                 return
             }
@@ -204,6 +210,13 @@ extension LaMarzoccoBluetoothClient {
                 log?("Shot counter reconnect failed: \(error)")
                 lastError = error as? LaMarzoccoError
                 await acquire(.connection)
+                // The gate wait is not cancellable: a stop that landed while this task waited must not
+                // be followed by a disconnect (the gate holder may have connected a new link meanwhile).
+                // Upstream's `async with self._lock` raises `CancelledError` here instead.
+                if Task.isCancelled {
+                    release(.connection)
+                    return
+                }
                 await disconnectInternal()
                 release(.connection)
                 delay = min(delay * 2, timing.reconnectMaxDelay)

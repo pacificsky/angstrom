@@ -525,6 +525,95 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         await client.disconnect()
     }
 
+    /// Angstrom-only: §4.13 — a stop that lands while the loop's connection-error branch waits for the connection gate is not followed by a disconnect: the link the gate holder connected meanwhile survives
+    func testStopWhileLoopWaitsForGateSkipsDisconnect() async throws {
+        let rig = makeRig(manual: [.idleDisconnect, .reconnectBackoff])
+        let client = rig.client
+        var timing = BluetoothTiming()
+        timing.connectAttempts = 1
+        await client.setTimingForTesting(timing)
+        let events = Recorder(await client.shotCounterEvents())
+        let first = FakeBluetoothLink.laMarzocco(token: "token")
+        rig.central.enqueueConnect(.success(first))
+        let started = try await client.startShotCounter()
+        XCTAssertTrue(started)
+
+        // The loop's attempt: no auth characteristic, so discovery fails (connection class). It is held
+        // in discovery, inside ensureConnected, while the loop holds the connection gate.
+        let attemptHeld = expectation(description: "the loop's attempt holds the gate")
+        let releaseAttempt = Latch()
+        let noAuth = FakeBluetoothLink()
+        noAuth.present = [BluetoothConstants.readCharacteristic, BluetoothConstants.writeCharacteristic,
+                          BluetoothConstants.shotCounterCharacteristic]
+        noAuth.beforeOp = { op in
+            guard op == .discover(refresh: false) else { return }
+            attemptHeld.fulfill()
+            await releaseAttempt.wait()
+        }
+        rig.central.enqueueConnect(.success(noAuth))
+        // The gate holder's connection, held in discovery while it holds the gate.
+        let holderHeld = expectation(description: "the holder holds the gate")
+        let releaseHolder = Latch()
+        let third = FakeBluetoothLink.laMarzocco(token: "token")
+        third.beforeOp = { op in
+            guard op == .discover(refresh: false) else { return }
+            holderHeld.fulfill()
+            await releaseHolder.wait()
+        }
+        rig.central.enqueueConnect(.success(third))
+
+        first.drop(.disconnected(code: 6))
+        await rig.sleeper.waitForPending(.reconnectBackoff, count: 1)
+        rig.sleeper.fire(.reconnectBackoff)
+        await fulfillment(of: [attemptHeld], timeout: 5)
+
+        // A connect queued behind the attempt is handed the gate when the attempt fails, before the
+        // loop's connection-error branch asks for it: the loop waits behind it.
+        let holderQueued = expectation(description: "the holder is queued on the gate")
+        let holder = Task { try await client.ensureConnectedQueued { holderQueued.fulfill() } }
+        await fulfillment(of: [holderQueued], timeout: 5)
+        releaseAttempt.open()
+        await fulfillment(of: [holderHeld], timeout: 5)
+        let loopWaiting = await client.peek { $0.gateWaiters[.connection]?.count ?? 0 }
+        XCTAssertEqual(loopWaiting, 1, "the loop waits for the gate in its connection-error branch")
+        XCTAssertEqual(noAuth.recordedOps, [.discover(refresh: false), .disconnect])
+
+        // Stop while the loop waits; it queues behind the loop.
+        let stopEntered = expectation(description: "stop entered")
+        let stopper = Task { await client.stopShotCounterSignalling { stopEntered.fulfill() } }
+        await fulfillment(of: [stopEntered], timeout: 5)
+        let stopped = await client.peek {
+            ($0.shotCounterEnabled, $0.reconnectTask == nil, $0.gateWaiters[.connection]?.count ?? 0)
+        }
+        XCTAssertFalse(stopped.0)
+        XCTAssertTrue(stopped.1)
+        XCTAssertEqual(stopped.2, 2, "the loop, then the stop")
+
+        // The gate goes to the loop first, then to the stop: once the stop is done, the loop is past it.
+        releaseHolder.open()
+        try await holder.value
+        await stopper.value
+
+        XCTAssertEqual(third.recordedOps, [.discover(refresh: false), .write(auth, tokenWrite), .read(auth)],
+                       "the cancelled loop issued no disconnect")
+        let state = await client.peek {
+            ($0.link === third, $0.isConnected, $0.shotCounterEnabled, $0.reconnectTask == nil)
+        }
+        XCTAssertTrue(state.0, "the holder's link is kept")
+        XCTAssertTrue(state.1)
+        XCTAssertFalse(state.2)
+        XCTAssertTrue(state.3)
+        XCTAssertEqual(rig.central.connectCount, 3)
+        XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1)], "the loop never slept again")
+        await fulfillment(of: [events.expectation { $0.count >= 2 }], timeout: 5)
+        if state.0 {  // with the link torn down there is no idle timer to wait for (a regression would hang)
+            await rig.sleeper.waitForPending(.idleDisconnect, count: 1)
+        }
+        await client.disconnect()
+        XCTAssertEqual(third.recordedOps.last, .disconnect)
+        XCTAssertEqual(events.elements, [.subscribed, .unsubscribed], "no second .unsubscribed, no .gaveUp")
+    }
+
     // MARK: - Helpers
 
     private struct Rig {
@@ -656,5 +745,19 @@ extension LaMarzoccoBluetoothClient {
     /// Runs `body` on the actor: read or set internal state from a test.
     fileprivate func peek<T: Sendable>(_ body: @Sendable (isolated LaMarzoccoBluetoothClient) -> T) -> T {
         body(self)
+    }
+
+    /// Calls `queued` on the actor, then `ensureConnected()`. Its first step is the connection-gate
+    /// wait, which enqueues synchronously, so once `queued` has run nothing else reaches the gate first.
+    fileprivate func ensureConnectedQueued(_ queued: @Sendable () -> Void) async throws {
+        queued()
+        _ = try await ensureConnected()
+    }
+
+    /// Calls `entered` on the actor, then `stopShotCounter()`, which disables the shot counter
+    /// synchronously before its connection-gate wait: any later actor call sees it disabled.
+    fileprivate func stopShotCounterSignalling(_ entered: @Sendable () -> Void) async {
+        entered()
+        await stopShotCounter()
     }
 }
