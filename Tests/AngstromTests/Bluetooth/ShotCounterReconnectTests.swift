@@ -47,6 +47,10 @@ final class ShotCounterReconnectTests: XCTestCase {
             await client.disconnect()
             return
         }
+        guard await fulfilled([events.expectation { $0.count >= 3 }], "loss reported") else {
+            await client.disconnect()
+            return
+        }
         XCTAssertEqual(events.elements, [.subscribed, .brewing(startedUpdate(at: start)), .unsubscribed])
         let lost = await client.inspect { client in
             var copy = client.tracker

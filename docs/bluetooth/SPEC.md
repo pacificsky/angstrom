@@ -17,7 +17,8 @@
 > only while still enabled), §4.13 (availability read once at loop start), §4.19
 > (`isShotCounterActive` from the client's live state after a start), §10.3 (key order not part of
 > the contract; `char`, `text` and `value` rules). From the Wave 3 reviews: §4.15 (the BLE-only
-> operations and `startShotCounter()` record and clear `lastError`).
+> operations and `startShotCounter()` record and clear `lastError`), §4.13 (vector connect counts
+> are upstream's), §9.4 (C37/C38 line).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -976,7 +977,10 @@ if link != nil { resetIdleTimer() }
 if stillEnabled, let e = lastError { emit .gaveUp(e) }    // Angstrom-only terminal event (D15)
 ```
 
-Vectors: retries through `[timedOut, connectionFailed]` → 4 connects in total, events
+Vectors (the connect counts here are upstream's, where one `establish_connection` call is one
+attempt; the Swift restatements in §9.4 C33/C34 count every `central.connect` call, including the
+§4.2 retries inside one attempt, and are the numbers the tests assert): retries through
+`[timedOut, connectionFailed]` → 4 connects in total, events
 `[.subscribed, .unsubscribed, .subscribed]` (`TBC:1053-1069`). A token mismatch after loss → 4
 connects, `authenticationFailed == true`, not active, not connected, no background tasks
 (`TBC:1072-1091`). Upstream's handling of non-Bleak exceptions (the task dies, `TBC` §4.2) is
@@ -2926,7 +2930,7 @@ Files are under `Tests/AngstromTests/Bluetooth/` unless prefixed `UI:` (`Tests/A
 | C34 `…gives_up_after_auth_failures` (`TBC:1072`) | `…testGivesUpAfterThreeAuthFailures`: `connectCount == 4` (initial + 3; auth failures are not retried inside a connect), `requested(.reconnectBackoff) == [1 s, 1 s, 1 s]`, `authenticationFailed`, not active, not connected, `hasBackgroundWorkForTesting == false`, plus `.gaveUp(.bluetoothAuthenticationFailed)` | T4 |
 | C35 `…no_reconnect_after_disconnect` (`TBC:1094`) | `…testUserDisconnectDoesNotReconnect` | T4 |
 | C36 `test_start_shot_counter_twice` (`TBC:1108`) | restated: `ShotCounterLifecycleTests.testStartTwiceSubscribesOnce` (one subscribe, no second `.subscribed`, returns true) | T3 |
-| C37/C38 `test_stop_shot_counter_reentrant[…]` (`TBC:1125`) | restated: `…testStopFromEventConsumerIsNoOp` (a consumer calling `stopShotCounter()`/`disconnect()` on `.unsubscribed` → one unsubscribe, events `[.subscribed, .unsubscribed]`) | T3 |
+| C37/C38 `test_stop_shot_counter_reentrant[…]` (`TBC:1126`) | restated: `…testStopFromEventConsumerIsNoOp` (a consumer calling `stopShotCounter()`/`disconnect()` on `.unsubscribed` → one unsubscribe, events `[.subscribed, .unsubscribed]`) | T3 |
 | C39 `test_machine_stop_from_update_callback` (`TBC:1156`) | `UI: ShotCounterOverlayTests.testStopFromEventConsumerDoesNotRecurse` | T6 |
 | C40 `…notifies_connection_callback` (`TBC:1183`) | `ShotCounterLifecycleTests.testDisconnectReportsUnsubscribed` | T3 |
 | C41 `test_cancelled_connect_does_not_keep_unauthenticated_link` (`TBC:1197`) | `BluetoothAuthTests.testCancellationDuringAuthDropsLink` (`beforeOp` holds the auth read; cancel; 1 disconnect; no `.connected`) | T1 |

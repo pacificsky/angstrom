@@ -395,6 +395,11 @@ final class ShotCounterLifecycleTests: XCTestCase {
         let after = try XCTUnwrap(rearmedTask, "an idle timer is armed")
         XCTAssertNotEqual(before, after, "a new idle timer")
         XCTAssertTrue(before.isCancelled, "the old idle timer was cancelled")
+        // An uncancelled timer would wait forever on its manual sleep: fail instead of hanging.
+        guard before.isCancelled else {
+            await client.disconnect()
+            return
+        }
         await before.value
         // The cancelled timer has finished, so the one pending sleep is the re-armed timer's. (How many
         // idle sleeps the connect and the request started before it is racy: the request's same-link
