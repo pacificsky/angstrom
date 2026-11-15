@@ -238,7 +238,7 @@ private func coreBluetoothSeconds(_ duration: Duration) -> Double {
 /// `BluetoothCentral` over `CBCentralManager`.
 ///
 /// `@unchecked Sendable` is sound because every stored `var` and every CB object it holds
-/// (`manager`, `known`, `links`, `scanSessions`, `scanLeases`) is touched only on `queue`,
+/// (`manager`, `known`, `connectsInFlight`, `links`, `scanSessions`, `scanLeases`) is touched only on `queue`,
 /// which is also the manager's delegate queue; queue-only helpers and every delegate
 /// callback assert it with `dispatchPrecondition(condition: .onQueue(queue))`. The one
 /// exception, `availabilitySubscribers`, is protected by its own `OSAllocatedUnfairLock`
@@ -260,7 +260,13 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
     // Queue-confined.
     private var manager: CBCentralManager?
     /// Retention table: CB cleans up a peripheral nobody retains (`CBCentralManager.h:303-305`).
+    /// Pruned at the start of every scan (SPEC §5.4) down to the entries `isRetentionPinned` keeps.
     private var known: [UUID: CBPeripheral] = [:]
+    /// `connect(to:)` calls in flight per identifier, counted from their first resolution to their
+    /// return (so including an identifier find, the window between resolution and registering the
+    /// `.connect` op, and the pending connect itself). Their peripherals are never pruned:
+    /// CoreBluetooth cancels a connection whose `CBPeripheral` is released.
+    private var connectsInFlight: [UUID: Int] = [:]
     /// Live links (connected and not yet terminated), at most one per peripheral.
     private var links: [UUID: CoreBluetoothLink] = [:]
     /// Active `scan(for:)` calls, each with its own de-duplicated, first-seen-ordered results.
@@ -301,6 +307,7 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
         let session = UUID()
         try await ops.runThrowing { [self] in
             try requirePoweredOn()
+            pruneRetention()
             scanSessions[session] = ScanSession()
             beginScanning(lease: session)
         }
@@ -320,24 +327,33 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
         try Task.checkCancellation()
         let resolved = try await ops.runThrowing { [self] in
             try requirePoweredOn()
+            // Pinned against scan-time pruning until this call returns (balanced below).
+            connectsInFlight[uuid, default: 0] += 1
             return resolvePeripheral(uuid) != nil
         }
-        if !resolved {
-            try await findByScanning(id, uuid)
-        }
-        let link: CoreBluetoothLink = try await ops.perform(
-            .connect(uuid), timeout: timeout,
-            // CoreBluetooth connects never time out (`CBCentralManager.h:201`): cancel ours.
-            onAbandon: { [self] in cancelAbandonedConnect(uuid) }
-        ) { [self] in
-            try requirePoweredOn()
-            guard let peripheral = resolvePeripheral(uuid) else {
-                throw BluetoothTransportError.unknownPeripheral(id)
+        do {
+            if !resolved {
+                try await findByScanning(id, uuid)
             }
-            // No options: never CBConnectPeripheralOptionEnableAutoReconnect (SPEC §5.4).
-            ensureManager().connect(peripheral, options: nil)
+            let link: CoreBluetoothLink = try await ops.perform(
+                .connect(uuid), timeout: timeout,
+                // CoreBluetooth connects never time out (`CBCentralManager.h:201`): cancel ours.
+                onAbandon: { [self] in cancelAbandonedConnect(uuid) }
+            ) { [self] in
+                try requirePoweredOn()
+                // Re-resolved here: `known` may have been emptied by a state drop since the lookup.
+                guard let peripheral = resolvePeripheral(uuid) else {
+                    throw BluetoothTransportError.unknownPeripheral(id)
+                }
+                // No options: never CBConnectPeripheralOptionEnableAutoReconnect (SPEC §5.4).
+                ensureManager().connect(peripheral, options: nil)
+            }
+            await ops.run { [self] in endConnect(uuid) }
+            return link
+        } catch {
+            await ops.run { [self] in endConnect(uuid) }
+            throw error
         }
-        return link
     }
 
     // MARK: CBCentralManagerDelegate (always on `queue`)
@@ -515,6 +531,8 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
                     }
                     return .satisfied(())
                 }
+                // This connect is in `connectsInFlight`, so pruning cannot touch its peripheral.
+                pruneRetention()
                 beginScanning(lease: lease)
                 return .issued
             }
@@ -526,6 +544,29 @@ final class CoreBluetoothCentral: NSObject, BluetoothCentral, CBCentralManagerDe
             throw error
         }
         await ops.run { [self] in endScanning(lease: lease) }
+    }
+
+    /// SPEC §5.4 retention pruning, run at the start of every scan: drop every retained
+    /// peripheral that has no live link and no connect in flight, so repeated scans in a busy
+    /// area cannot grow `known` without bound. A pruned peripheral is re-resolved by identifier
+    /// (`retrievePeripherals`, then an identifier scan) on its next connect.
+    private func pruneRetention() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        known = known.filter { isRetentionPinned($0.key) }
+    }
+
+    /// A retained peripheral that must survive pruning: a live link uses it, or a connect is in
+    /// flight for it (counted, or registered as a pending `.connect` op).
+    private func isRetentionPinned(_ uuid: UUID) -> Bool {
+        dispatchPrecondition(condition: .onQueue(queue))
+        return links[uuid] != nil || connectsInFlight[uuid] != nil || ops.isAwaiting(.connect(uuid))
+    }
+
+    /// Balances the `connectsInFlight` increment made when a `connect(to:)` call began.
+    private func endConnect(_ uuid: UUID) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard let count = connectsInFlight[uuid] else { return }
+        connectsInFlight[uuid] = count > 1 ? count - 1 : nil
     }
 
     private func beginScanning(lease: UUID) {

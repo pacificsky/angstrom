@@ -177,9 +177,9 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
             try requireConnected()
             return (peripheral.services ?? []).map { service in
                 BluetoothGATTService(
-                    uuid: GATTUUID(service.uuid.uuidString).string,
+                    uuid: service.uuid.gattUUID.string,
                     characteristics: (service.characteristics ?? []).map { characteristic in
-                        BluetoothGATTCharacteristic(uuid: GATTUUID(characteristic.uuid.uuidString).string,
+                        BluetoothGATTCharacteristic(uuid: characteristic.uuid.gattUUID.string,
                                                     properties: Self.propertyNames(characteristic.properties))
                     })
             }
@@ -201,10 +201,10 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
         // Only a service that is still current feeds the table (not one invalidated meanwhile).
         if error == nil, !isTerminated, peripheral.services?.contains(where: { $0 === service }) == true {
             for characteristic in service.characteristics ?? [] {
-                characteristics[GATTUUID(characteristic.uuid.uuidString)] = characteristic
+                characteristics[characteristic.uuid.gattUUID] = characteristic
             }
         }
-        ops.finishOldest(.discoverCharacteristics(ObjectIdentifier(service), service: GATTUUID(service.uuid.uuidString)),
+        ops.finishOldest(.discoverCharacteristics(ObjectIdentifier(service), service: service.uuid.gattUUID),
                          Self.result(error))
     }
 
@@ -222,7 +222,7 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
         dispatchPrecondition(condition: .onQueue(queue))
         // Stamp first, inside the callback: actor hops must not skew brewing-start maths.
         let receivedAt = now()
-        let uuid = GATTUUID(characteristic.uuid.uuidString)
+        let uuid = characteristic.uuid.gattUUID
         let value = characteristic.value ?? Data()
         // One callback serves reads AND notifications. A pending (or owed) read wins; the
         // client never reads a characteristic it is subscribed to.
@@ -236,13 +236,13 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic,
                     error: (any Error)?) {
         dispatchPrecondition(condition: .onQueue(queue))
-        ops.finishOldest(.write(GATTUUID(characteristic.uuid.uuidString)), Self.result(error))
+        ops.finishOldest(.write(characteristic.uuid.gattUUID), Self.result(error))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic,
                     error: (any Error)?) {
         dispatchPrecondition(condition: .onQueue(queue))
-        ops.finishOldest(.notify(GATTUUID(characteristic.uuid.uuidString)), Self.result(error))
+        ops.finishOldest(.notify(characteristic.uuid.gattUUID), Self.result(error))
     }
 
     // MARK: Private
@@ -325,7 +325,7 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
                 keyedServices[ObjectIdentifier(service)] = service
             }
             let handles = current.map {
-                ServiceHandle(id: ObjectIdentifier($0), uuid: GATTUUID($0.uuid.uuidString))
+                ServiceHandle(id: ObjectIdentifier($0), uuid: $0.uuid.gattUUID)
             }
             return (discoveryGeneration, handles)
         }
@@ -389,6 +389,34 @@ final class CoreBluetoothLink: NSObject, BluetoothLink, CBPeripheralDelegate, @u
             (.indicateEncryptionRequired, "indicateEncryptionRequired"),
         ]
         return names.filter { properties.contains($0.0) }.map(\.1)
+    }
+}
+
+// MARK: - UUID normalisation (SPEC §6.2)
+
+extension CBUUID {
+    /// This UUID as a `GATTUUID`: lowercase and always the full 128-bit form. Every place the
+    /// adapter turns a `CBUUID` into a string or a `GATTUUID` goes through here, because
+    /// `uuidString` is the short form for 16- and 32-bit SIG UUIDs ("180A", not
+    /// "0000180A-0000-1000-8000-00805F9B34FB").
+    fileprivate var gattUUID: GATTUUID {
+        GATTUUID(fullGATTUUIDString(uuidString))
+    }
+}
+
+/// Pure: expands a 4- or 8-hex-digit (16-/32-bit SIG) UUID string with the Bluetooth base UUID
+/// (`0000xxxx-0000-1000-8000-00805f9b34fb` / `xxxxxxxx-0000-1000-8000-00805f9b34fb`) and
+/// lowercases the result. Any other string (already 128-bit) is only lowercased.
+private func fullGATTUUIDString(_ string: String) -> String {
+    let lower = string.lowercased()
+    // ASCII only (`Character.isHexDigit` also accepts fullwidth forms).
+    guard lower.unicodeScalars.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) }) else {
+        return lower
+    }
+    switch lower.count {
+    case 4: return "0000\(lower)-0000-1000-8000-00805f9b34fb"
+    case 8: return "\(lower)-0000-1000-8000-00805f9b34fb"
+    default: return lower
     }
 }
 #endif
