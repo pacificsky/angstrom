@@ -76,6 +76,30 @@ public actor LaMarzoccoBluetoothClient {
         self.authenticationFailed = false
     }
 
+    /// §5.5 Lifetime: a client released without `disconnect()` must not leak its link or park its
+    /// consumers. The idle task and the link watcher hold the client weakly, so nothing else would
+    /// close the link or end the listener streams. No event is emitted from here.
+    ///
+    /// A running reconnect loop (or any tracked background task) holds the client strongly, so the
+    /// client lives until that work ends; cancelling `reconnectTask` here only covers a stale handle.
+    deinit {
+        idleTask?.cancel()
+        linkWatcher?.cancel()
+        reconnectTask?.cancel()
+        if let live = link {
+            Task { await live.disconnect() }
+        }
+        for listener in connectionListeners.values {
+            listener.finish()
+        }
+        for listener in shotCounterListeners.values {
+            listener.finish()
+        }
+        for listener in rawFrameListeners.values {
+            listener.finish()
+        }
+    }
+
     /// An authenticated link is up.
     public var isConnected: Bool { link != nil }
     /// The last auth read was not 0x01 — usually a wrong token.
