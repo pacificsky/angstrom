@@ -15,7 +15,8 @@
 > returns the rendered dashboard), §5.4 (retention pruning), §6.2 (128-bit UUID strings), §10.3
 > (`ble listen` on give-up), §12 D5(h)–(k), D9. From the Wave 2 fix reviews: §4.9 (`.subscribed`
 > only while still enabled), §4.13 (availability read once at loop start), §4.19
-> (`isShotCounterActive` from the client's live state after a start).
+> (`isShotCounterActive` from the client's live state after a start), §10.3 (key order not part of
+> the contract; `char`, `text` and `value` rules).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -3074,13 +3075,18 @@ Each subcommand lives in its own file under `cli/Sources/angcli/Ble/`.
 
 ### 10.3 Output conventions
 
+- **Key order is not part of the contract.** The shapes in §10.1 and below list the keys of each
+  line, not their order: the `ble` encoder prints keys sorted (`.sortedKeys`,
+  `.withoutEscapingSlashes`), so lines are stable for diffing.
 - Reuse `Stdout`/`Stderr` and the `{ts, dir, …}` line shape of `FramePrinter`
   (`cli/Sources/angcli/Output.swift:50-106`), with the `>>`/`<<` arrows in text mode. A raw BLE
   line is `{"ts","dir":">>"|"<<","kind":"write|read|notification|event","char":"0b0b…","hex":"…","text":"…"}`.
-  `text` is present when the bytes are valid UTF-8. For `event`, `text` is the marker.
+  `text` is present when the bytes are valid UTF-8 and left out otherwise. For `event`, `text` is
+  the marker and `char` is `null` (`char` is always present).
 - A decoded line is `{"ts","event":"connected|disconnected|subscribed|unsubscribed|brewing|telemetry|gaveUp","value":{…}}`.
   `value` uses a CLI-local `Encodable` mirror of `BluetoothShotCounterUpdate` /
-  `BluetoothMachineTelemetry`.
+  `BluetoothMachineTelemetry`. It is `{}` for `connected`, `disconnected`, `subscribed` and
+  `unsubscribed`, and `{"error":…}` for `gaveUp`.
 - `ble listen` installs `SignalHandler` (SIGINT) → `stopShotCounter()` + `disconnect()`, then exits
   0, mirroring `Listen.swift:34-38`. If the shot counter gives up (`ShotCounterEvent.gaveUp(error)`),
   `ble listen` prints the mapped error to stderr, disconnects and exits non-zero in every output
