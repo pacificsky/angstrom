@@ -276,16 +276,21 @@ final class ShotCounterOverlayTests: XCTestCase {
 
     /// Upstream: test_bluetooth_refresh_after_shot_replaces_cloud_status (tests/test_machine.py:917) [M20, §9.3.8 D9]
     func testBluetoothRefreshBecomesBaseline() async throws {
-        let rig = try await makeRig(status: machineStatus(.poweredOn))
+        let rig = try await makeRig(status: machineStatus(.poweredOn),
+                                    settingResponses: bluetoothDashboardReplies(mode: "StandBy"))
         let machine = rig.machine
         try await rig.deliver(.brewing(update(.brewing, timer: 3)))
         try await rig.deliver(.brewing(update(.brewingStopped, final: 27.4)))
         try await rig.waitForExpirySleeps(2)
 
-        // The machine is put in standby and the dashboard is refreshed over Bluetooth (§4.17 step 6).
-        let state = BluetoothDashboardState(machineMode: .standby, isPlumbedIn: false, tankStatus: true, boilers: [])
-        machine.updateBaseDashboard { $0.applyingBluetoothState(state, model: .lineaMicra) }
+        // The machine is put in standby and the dashboard is refreshed over Bluetooth (§4.17 step 6),
+        // through the device method upstream calls (`get_dashboard_from_bluetooth`), with the overlay held.
+        let returned = try await machine.refreshDashboardFromBluetooth()
+        XCTAssertEqual(readRequests(rig), dashboardReads)
+        XCTAssertNotNil(machine.bluetoothBrewingUpdate)
+        XCTAssertEqual(machine.baseDashboard?.machineStatus?.status, .standby)
         XCTAssertEqual(machine.dashboard?.machineStatus?.status, .standby)
+        XCTAssertEqual(returned, machine.dashboard)
 
         rig.gate.fire(1)
         try await rig.waitForEvents(3)
@@ -299,14 +304,19 @@ final class ShotCounterOverlayTests: XCTestCase {
 
     /// Upstream: test_bluetooth_refresh_while_brewing_keeps_cloud_start_time (tests/test_machine.py:940) [M21, §9.3.8 D10]
     func testBluetoothRefreshKeepsCloudStartTime() async throws {
-        let rig = try await makeRig(status: machineStatus(.poweredOn, cloudStart))
+        let rig = try await makeRig(status: machineStatus(.poweredOn, cloudStart),
+                                    settingResponses: bluetoothDashboardReplies(mode: "BrewingMode"))
         let machine = rig.machine
         try await rig.deliver(.brewing(update(.brewing, timer: 3)))
 
-        let state = BluetoothDashboardState(machineMode: .brewing, isPlumbedIn: false, tankStatus: true, boilers: [])
-        machine.updateBaseDashboard { $0.applyingBluetoothState(state, model: .lineaMicra) }
+        // The Bluetooth refresh during the shot (upstream `get_dashboard_from_bluetooth`): it writes only
+        // `mode`/`status` into the base and never `brewingStartTime` (§4.19).
+        let returned = try await machine.refreshDashboardFromBluetooth()
+        XCTAssertEqual(readRequests(rig), dashboardReads)
+        XCTAssertEqual(machine.baseDashboard?.machineStatus?.brewingStartTime, cloudStart)
         XCTAssertEqual(machine.dashboard?.machineStatus?.status, .brewing)
         XCTAssertEqual(machine.dashboard?.machineStatus?.brewingStartTime, receivedAt.addingTimeInterval(-3))
+        XCTAssertEqual(returned, machine.dashboard)
 
         try await rig.deliver(.brewing(update(.brewingStopped, final: 27.4)))
         XCTAssertEqual(machine.dashboard?.machineStatus?.status, .poweredOn)
@@ -902,6 +912,112 @@ final class ShotCounterOverlayTests: XCTestCase {
         log.cancel()
     }
 
+    // MARK: - Lifetime
+
+    /// Angstrom-only: §5.5 — the shot-counter listener and the brewing-expiry task hold only the event
+    /// stream (and the machine weakly), never the Bluetooth client or the machine: releasing the machine
+    /// together with its client, with both tasks alive, deallocates both.
+    func testShotCounterTasksRetainNeitherMachineNorClient() async throws {
+        var harness: BluetoothMachineHarness? = BluetoothMachineHarness(seed: .custom(dashboard(status: machineStatus(.poweredOn))))
+        let gate = ExpiryGate()
+        weak var weakMachine: LaMarzoccoMachine?
+        weak var weakClient: LaMarzoccoBluetoothClient?
+        let log: EventLog
+        let listener: Task<Void, Never>
+        let expiry: Task<Void, Never>
+        do {
+            let machine = try XCTUnwrap(harness?.machine)
+            let client = try XCTUnwrap(harness?.bluetooth)
+            weakMachine = machine
+            weakClient = client
+            machine.setBluetoothBrewingExpiryForTesting(timeout: brewingStateTimeout) { try await gate.sleep($0) }
+            log = EventLog(machine.bluetoothEvents())
+            let started = try await machine.startShotCounter()
+            XCTAssertTrue(started)
+
+            // A running shot: the listener has handled an event and the expiry is parked in its sleep.
+            await client.emitShotCounter(.brewing(update(.brewing, timer: 3)))
+            await fulfillment(of: [log.expectation(count: 1)], timeout: hangGuard)
+            let parked = XCTestExpectation(description: "expiry sleep requested")
+            Task {
+                await gate.waitForSleeps(1)
+                parked.fulfill()
+            }
+            await fulfillment(of: [parked], timeout: hangGuard)
+            listener = try XCTUnwrap(machine.shotCounterTask)
+            expiry = try XCTUnwrap(machine.brewingExpiryTask)
+            XCTAssertNotNil(machine.bluetoothBrewingUpdate)
+
+            // Isolate the shot-counter tasks: end the machine's connection observer (§6.16, not part of
+            // the shot counter), whose closure captures the client for the task's life — a BT-W3-06 defect
+            // proven by testConnectionObserverDoesNotRetainClient below.
+            let observer = try XCTUnwrap(machine.bluetoothConnectionTask)
+            observer.cancel()
+            await observer.value
+        }
+
+        // Release the machine and its client together, without stopping anything.
+        harness = nil
+        XCTAssertNil(weakMachine, "the shot-counter tasks must not keep the machine alive")
+        XCTAssertNil(weakClient, "the shot-counter listener must not keep the Bluetooth client alive")
+        // Both tasks were still alive when the machine and the client went away.
+        XCTAssertFalse(listener.isCancelled)
+        XCTAssertFalse(expiry.isCancelled)
+
+        // The parked expiry wakes to a released machine and ends without acting.
+        gate.fire(0)
+        await expiry.value
+        XCTAssertEqual(log.events, [.brewing(update(.brewing, timer: 3))])
+        log.cancel()
+    }
+
+    /// Angstrom-only: §5.5 — the machine's connection observer holds only the event stream, never the
+    /// Bluetooth client: releasing the machine together with its client, with the observer alive and not
+    /// cancelled, deallocates the client, whose teardown then finishes the stream and ends the observer.
+    /// (The regression test for the review finding behind the explicit cancel in the test above.)
+    func testConnectionObserverDoesNotRetainClient() async throws {
+        try XCTSkipIf(true, """
+            BLOCKED-BY BT-W3-06: startObservingBluetoothConnection() captures the Bluetooth client strongly \
+            in bluetoothConnectionTask for the task's life (LaMarzoccoMachine+BluetoothConnection.swift:30), \
+            so a released machine and client never deallocate (SPEC §5.5 isolation table). \
+            BLOCKED-BY BT-W1-09: LaMarzoccoBluetoothClient has no deinit teardown, so a released client \
+            never finishes its connectionEvents() continuations and the observer never ends (SPEC §5.5 Lifetime).
+            """)
+        var harness: BluetoothMachineHarness? = BluetoothMachineHarness(
+            cloud: false, bluetooth: true, settingResponses: bluetoothDashboardReplies(mode: "BrewingMode"))
+        weak var weakMachine: LaMarzoccoMachine?
+        weak var weakClient: LaMarzoccoBluetoothClient?
+        let observer: Task<Void, Never>
+        do {
+            let machine = try XCTUnwrap(harness?.machine)
+            let client = try XCTUnwrap(harness?.bluetooth)
+            weakMachine = machine
+            weakClient = client
+            observer = try XCTUnwrap(machine.bluetoothConnectionTask)
+
+            // Drive one connect/disconnect cycle so the observer has registered, seeded and handled both
+            // events: it is now parked in its `for await`, past every use of the client.
+            _ = try await client.machineMode()
+            try await awaitState("isBluetoothConnected == true") { machine.isBluetoothConnected }
+            await client.disconnect()
+            try await awaitState("isBluetoothConnected == false") { !machine.isBluetoothConnected }
+        }
+
+        // Release the machine and its client together, without cancelling the observer.
+        harness = nil
+        XCTAssertNil(weakMachine, "the connection observer must not keep the machine alive")
+        XCTAssertNil(weakClient, "the connection observer must not keep the Bluetooth client alive")
+        XCTAssertFalse(observer.isCancelled)
+
+        // The client's teardown finished the observer's stream, so the task ends on its own.
+        let ended = XCTestExpectation(description: "connection observer ended")
+        Task {
+            await observer.value
+            ended.fulfill()
+        }
+        await fulfillment(of: [ended], timeout: hangGuard)
+    }
+
     // MARK: - Helpers
 
     /// A started shot counter on a harness machine, with a gate-controlled expiry and an event log.
@@ -950,12 +1066,13 @@ final class ShotCounterOverlayTests: XCTestCase {
         }
     }
 
-    private func makeRig(status: MachineStatus) async throws -> Rig {
-        try await makeRig(seed: dashboard(status: status))
+    private func makeRig(status: MachineStatus,
+                         settingResponses: [BluetoothReadSetting: Data] = [:]) async throws -> Rig {
+        try await makeRig(seed: dashboard(status: status), settingResponses: settingResponses)
     }
 
-    private func makeRig(seed: Dashboard) async throws -> Rig {
-        let harness = BluetoothMachineHarness(seed: .custom(seed))
+    private func makeRig(seed: Dashboard, settingResponses: [BluetoothReadSetting: Data] = [:]) async throws -> Rig {
+        let harness = BluetoothMachineHarness(seed: .custom(seed), settingResponses: settingResponses)
         let gate = ExpiryGate()
         harness.machine.setBluetoothBrewingExpiryForTesting(timeout: brewingStateTimeout) { try await gate.sleep($0) }
         let log = EventLog(harness.machine.bluetoothEvents())
@@ -963,6 +1080,28 @@ final class ShotCounterOverlayTests: XCTestCase {
         XCTAssertTrue(started)
         XCTAssertTrue(harness.machine.isShotCounterActive)
         return Rig(harness: harness, gate: gate, log: log, test: self)
+    }
+
+    /// upstream `_mock_bluetooth_dashboard(client, mode)` (tests/test_machine.py:908-912): the given
+    /// mode, not plumbed in, the tank full, no boilers.
+    private func bluetoothDashboardReplies(mode: String) -> [BluetoothReadSetting: Data] {
+        [
+            .machineMode: Data("\"\(mode)\"".utf8),
+            .isPlumbedIn: Data("false".utf8),
+            .tankStatus: Data(#""true""#.utf8),
+            .boilers: Data("[]".utf8),
+        ]
+    }
+
+    /// The four read requests of a Bluetooth dashboard refresh with a known model, in upstream order
+    /// (BT-READ-REQ: raw value + NUL); the model is known, so capabilities are not read.
+    private var dashboardReads: [Data] {
+        [BluetoothReadSetting.machineMode, .isPlumbedIn, .tankStatus, .boilers].map { Data(($0.rawValue + "\0").utf8) }
+    }
+
+    /// Every read request the client wrote (to 0a0b…), across all links, in order.
+    private func readRequests(_ rig: Rig) -> [Data] {
+        rig.harness.bluetoothWrites(to: BluetoothConstants.readCharacteristic)
     }
 
     /// upstream `machine_status(status, brewing_start_time)` (tests/conftest.py:60-72).
