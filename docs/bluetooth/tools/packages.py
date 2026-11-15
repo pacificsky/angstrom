@@ -446,7 +446,7 @@ pkg(id="BT-W1-05", title="Dashboard transforms: BLE widget synthesis and the sho
     task=(
         "Implement the Dashboard extension in Sources/Angstrom/Bluetooth/Dashboard+Bluetooth.swift (SPEC §6.12) using the internal widget memberwise initialisers. "
         "upserting replaces the first widget with the same code, keeping its index, else appends. removingWidgets(code:) removes all of them. settingMachineState sets only CMMachineStatus.status. "
-        "applyingBluetoothState follows the §4.17 table exactly: waterOK = isPlumbedIn || tankStatus; boilerStatus(enabled); an 'existing W' must have the matching typed kind (an .unknown widget counts as absent); append index 1 in the order CMMachineStatus, CMCoffeeBoiler, steam widget, CMNoWater; upstream defaults kept (coffee 80/110/0.1; Mini steam 95/140 supported=false; other steam 20/134 supported=true; enabledSupported per table); the coffee boiler never shows .off; duplicate boiler ids: last wins; .other ids ignored; the level path removes every CMSteamBoilerTemperature and the temperature path removes every CMSteamBoilerLevel; CMMachineGroupStatus is untouched. "
+        "applyingBluetoothState follows the §4.17 table exactly: waterOK = isPlumbedIn || tankStatus; boilerStatus(enabled); an 'existing W' must have the matching typed kind; an .unknown widget carrying code W is replaced in place by the default-built typed widget, keeping its index, so a code never appears twice; when no widget has the code, append index 1 in the order CMMachineStatus, CMCoffeeBoiler, steam widget, CMNoWater; upstream defaults kept (coffee 80/110/0.1; Mini steam 95/140 supported=false; other steam 20/134 supported=true; enabledSupported per table); the coffee boiler never shows .off; duplicate boiler ids: last wins; .other ids ignored; the level path removes every CMSteamBoilerTemperature and the temperature path removes every CMSteamBoilerLevel; CMMachineGroupStatus is untouched. "
         "overlayingBluetoothBrewing follows the §4.19 table: nil → self; no CMMachineStatus → self; .brewing → status .brewing and brewingStartTime = update.brewingStartTime; any other state (including .backflushing) → status = (base.status == .brewing ? .poweredOn : base.status) and the base brewingStartTime. "
         "Test the pure snapshots BT-DASH-SNAP-001/002, GS3-001, MINI-001, PLUMB-001 and STATUS-001…005 (supplementary to the UI-level D01–D06/D15–D19 owned by BT-W3-08) and every overlay row."),
     extraTests=[
@@ -460,7 +460,7 @@ pkg(id="BT-W1-05", title="Dashboard transforms: BLE widget synthesis and the sho
         "DashboardBluetoothTests.testPlumbInFalseTankFalseRaisesAlarm (BT-DASH-PLUMB-001)",
         "DashboardBluetoothTests.testWidgetDefaultsAndEdgeCases (Angstrom-only: G-DEV-3)",
         "DashboardBluetoothTests.testAvailableModesKept (Angstrom-only: G-DEV-10)",
-        "DashboardBluetoothTests.testUnknownWidgetCountsAsAbsent",
+        "DashboardBluetoothTests.testUnknownWidgetReplacedInPlace",
         "DashboardBluetoothTests.testOverlayTable (Angstrom-only: D12)",
     ],
     tests=[],
