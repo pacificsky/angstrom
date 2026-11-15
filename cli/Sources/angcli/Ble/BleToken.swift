@@ -1,3 +1,4 @@
+import Foundation
 import ArgumentParser
 import Angstrom
 
@@ -18,6 +19,13 @@ struct BleToken: AsyncParsableCommand {
 
     @Flag(name: .long, help: "Print the real token (to stdout only) instead of masking it.")
     var showSecret = false
+
+    func validate() throws {
+        // BleSession treats an empty --peripheral as "not given"; here it is required.
+        guard !peripheral.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw ValidationError("--peripheral must not be empty.")
+        }
+    }
 
     func run() async throws {
         let transport = BleSession.makeTransport()

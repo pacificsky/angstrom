@@ -18,9 +18,15 @@ struct BleScan: AsyncParsableCommand {
     @Flag(name: .long, help: "List every peripheral seen, not only La Marzocco machines (names may be null).")
     var all = false
 
+    /// Longest accepted `--duration` (one day). The bound keeps `Duration.seconds(_:)` (which
+    /// traps when the value overflows its attosecond range) and the scan's `Task.sleep` (which
+    /// converts to 64-bit nanoseconds) from crashing on huge input; out-of-range values fail
+    /// validation instead.
+    static let maximumDuration: Double = 86_400
+
     func validate() throws {
-        guard duration.isFinite, duration > 0 else {
-            throw ValidationError("--duration must be a positive number of seconds.")
+        guard duration.isFinite, duration > 0, duration <= Self.maximumDuration else {
+            throw ValidationError("--duration must be a positive number of seconds, at most \(Int(Self.maximumDuration)).")
         }
     }
 

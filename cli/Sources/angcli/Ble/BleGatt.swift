@@ -1,3 +1,4 @@
+import Foundation
 import ArgumentParser
 import Angstrom
 
@@ -13,6 +14,13 @@ struct BleGatt: AsyncParsableCommand {
 
     @Option(name: .long, help: "Peripheral identifier from `angcli ble scan` (a CoreBluetooth UUID, not a MAC).")
     var peripheral: String
+
+    func validate() throws {
+        // BleSession treats an empty --peripheral as "not given"; here it is required.
+        guard !peripheral.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw ValidationError("--peripheral must not be empty.")
+        }
+    }
 
     func run() async throws {
         let transport = BleSession.makeTransport()

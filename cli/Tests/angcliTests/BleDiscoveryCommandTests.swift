@@ -32,9 +32,21 @@ final class BleDiscoveryCommandTests: XCTestCase {
         XCTAssertTrue(routed.all)
 
         // Non-numeric, zero and non-finite durations are rejected at parse time.
-        for bad in ["abc", "0", "inf", "nan"] {
+        for bad in ["abc", "0", "-1", "inf", "nan"] {
             XCTAssertThrowsError(try BleScan.parse(["--duration", bad]), "--duration \(bad)")
         }
+        // Huge finite durations would trap in Duration.seconds(_:) / Task.sleep; they must fail
+        // validation (a ValidationError naming --duration) instead of crashing the process.
+        for huge in ["86400.001", "1e12", "1e30", "1.7976931348623157e308"] {
+            XCTAssertThrowsError(try BleScan.parse(["--duration", huge]), "--duration \(huge)") { error in
+                XCTAssertTrue(BleScan.message(for: error).contains("--duration"),
+                              "out-of-range message: \(BleScan.message(for: error))")
+            }
+        }
+        // The bound itself is accepted, and converting it to a Duration is safe.
+        let longest = try BleScan.parse(["--duration", "86400"])
+        XCTAssertEqual(longest.duration, BleScan.maximumDuration)
+        XCTAssertEqual(Duration.seconds(longest.duration), .seconds(86_400))
         // scan selects no machine: it takes no peripheral/token options.
         XCTAssertThrowsError(try BleScan.parse(["--peripheral", peripheralID]))
     }
@@ -51,6 +63,11 @@ final class BleDiscoveryCommandTests: XCTestCase {
 
         let routed = try XCTUnwrap(try Ble.parseAsRoot(["gatt", "--peripheral", peripheralID]) as? BleGatt)
         XCTAssertEqual(routed.peripheral, peripheralID)
+
+        // An empty --peripheral is "not given" elsewhere (BleSession); here it is rejected.
+        for empty in ["", "  "] {
+            XCTAssertThrowsError(try BleGatt.parse(["--peripheral", empty]), "--peripheral '\(empty)'")
+        }
 
         // gatt needs no token (SPEC §10.1): the token-selection options do not exist on it.
         XCTAssertThrowsError(try BleGatt.parse(["--peripheral", peripheralID, "--ble-token", "t"]))
@@ -75,6 +92,9 @@ final class BleDiscoveryCommandTests: XCTestCase {
                           "missing-option message: \(BleToken.message(for: error))")
         }
         XCTAssertThrowsError(try BleToken.parse(["--show-secret"]))
+        for empty in ["", "  "] {
+            XCTAssertThrowsError(try BleToken.parse(["--peripheral", empty, "--show-secret"]), "--peripheral '\(empty)'")
+        }
         // --show-secret is a flag; it takes no value.
         XCTAssertThrowsError(try BleToken.parse(["--peripheral", peripheralID, "--show-secret", "false"]))
     }
