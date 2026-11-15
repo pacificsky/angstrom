@@ -3,8 +3,9 @@ import ArgumentParser
 import Angstrom
 @testable import angcli
 
-/// `angcli ble listen` argument parsing (SPEC §10.1, §10.3). Parsing only: running the command
-/// needs Bluetooth hardware.
+/// `angcli ble listen` (SPEC §10.1, §10.3): argument parsing, plus the hardware-free pieces of the
+/// run loop (the per-event give-up decision and the SIGINT / give-up handshake). Running the
+/// command end to end needs Bluetooth hardware.
 final class BleListenTests: XCTestCase {
     /// Angstrom-only: §10.1 — no view flag (or both `--raw --decoded`) prints raw frames and decoded events.
     func testListenDefaultsToBoth() throws {
@@ -61,5 +62,70 @@ final class BleListenTests: XCTestCase {
 
         // The selection options are --long only; an option of another subcommand is rejected.
         XCTAssertThrowsError(try BleListen.parse(["--show-secret"]))
+    }
+
+    /// Angstrom-only: §10.3 (amended) — `.gaveUp(error)` ends the run with the §10.3-mapped error;
+    /// every other shot-counter event keeps it listening.
+    func testGaveUpEventEndsListenWithMappedError() throws {
+        let auth = try XCTUnwrap(BleListen.giveUpError(for: .gaveUp(.bluetoothAuthenticationFailed)))
+        XCTAssertEqual(auth.message, LaMarzoccoError.bluetoothAuthenticationFailed.errorDescription)
+        XCTAssertEqual(auth.message, BleSession.cliError(LaMarzoccoError.bluetoothAuthenticationFailed).message)
+
+        let missing = LaMarzoccoError.bluetoothConnectionFailed(
+            "Could not find characteristic 0e0b7847-e12b-09a8-b04b-8e0922a9abab on machine.")
+        XCTAssertEqual(BleListen.giveUpError(for: .gaveUp(missing))?.message, missing.errorDescription)
+
+        // The §10.3 Bluetooth-availability texts apply to a give-up too.
+        XCTAssertEqual(BleListen.giveUpError(for: .gaveUp(.bluetoothUnavailable(.poweredOff)))?.message,
+                       "Bluetooth is off.")
+
+        let update = BluetoothShotCounterUpdate(state: .brewing, timerValue: 3, receivedAt: Date(timeIntervalSince1970: 0),
+                                                raw: BluetoothBrewingData())
+        let others: [ShotCounterEvent] = [.subscribed, .unsubscribed, .brewing(update),
+                                          .telemetry(BluetoothMachineTelemetry(coffeeBoilerTemperature: 93))]
+        for event in others {
+            XCTAssertNil(BleListen.giveUpError(for: event), "\(event) must not end the run")
+        }
+    }
+
+    /// Angstrom-only: §10.3 (amended) — a give-up wakes the waiting run without any SIGINT (it used
+    /// to sit silent until Ctrl-C), and a later Ctrl-C starts no second teardown.
+    func testGiveUpWakesListenerWithoutSigint() async throws {
+        let stop = ListenStopSignal()
+        let waiter = Task { await stop.waitForEnd() }
+        await Task.yield()
+
+        await stop.giveUp(CLIError("Bluetooth authentication failed."))
+        let ended = await waiter.value
+        XCTAssertEqual(ended?.message, "Bluetooth authentication failed.")
+
+        // Ctrl-C after the give-up: run() is already disconnecting, the handler stands down.
+        let interruptStarted = await stop.beginTeardown()
+        XCTAssertFalse(interruptStarted)
+        let interrupted = await stop.interrupted
+        XCTAssertFalse(interrupted)
+
+        // Only the first give-up counts; a late waiter returns at once with it.
+        await stop.giveUp(CLIError("second"))
+        let late = await stop.waitForEnd()
+        XCTAssertEqual(late?.message, "Bluetooth authentication failed.")
+    }
+
+    /// Angstrom-only: §10.1/§10.3 — Ctrl-C first owns the shutdown: a give-up during the SIGINT
+    /// teardown is ignored, and the run ends cleanly (exit 0) once the teardown has finished.
+    func testSigintBeforeGiveUpEndsCleanly() async throws {
+        let stop = ListenStopSignal()
+        let teardownStarted = await stop.beginTeardown()
+        XCTAssertTrue(teardownStarted)
+        let secondInterrupt = await stop.beginTeardown()
+        XCTAssertFalse(secondInterrupt)
+
+        let waiter = Task { await stop.waitForEnd() }
+        await stop.giveUp(CLIError("ignored"))
+        await stop.finishTeardown()
+
+        let ended = await waiter.value
+        XCTAssertNil(ended)
+        await stop.waitForTeardown()   // already torn down: returns at once
     }
 }

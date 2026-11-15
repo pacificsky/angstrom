@@ -33,14 +33,17 @@ struct BleListen: AsyncParsableCommand {
         }
 
         // Register every tap BEFORE startShotCounter() so the connect markers, the auth write
-        // and poll reads, and the subscribe frames are all captured.
+        // and poll reads, and the subscribe frames are all captured. The shot-counter stream is
+        // registered in every mode (raw-only included): it carries the terminal `.gaveUp` event
+        // (SPEC §10.3), even when its lines are not printed.
         let rawStream = mode.includesRaw ? await client.rawFrames() : nil
         let connectionStream = mode.includesDecoded ? await client.connectionEvents() : nil
-        let shotCounterStream = mode.includesDecoded ? await client.shotCounterEvents() : nil
+        let shotCounterStream = await client.shotCounterEvents()
 
         // Clean SIGINT → stopShotCounter() + disconnect(), then the run ends with exit 0
-        // (mirrors Listen.swift).
-        let stop = StopSignal()
+        // (mirrors Listen.swift). Ignored once the shot counter has given up: run() is already
+        // disconnecting and exits non-zero.
+        let stop = ListenStopSignal()
         let interrupt = SignalHandler.install(SIGINT) {
             guard await stop.beginTeardown() else { return }
             Stderr.log("\nDisconnecting…")
@@ -60,8 +63,11 @@ struct BleListen: AsyncParsableCommand {
             if let connectionStream {
                 group.addTask { for await event in connectionStream { Self.emit(BleOutput.connectionLine(event)) } }
             }
-            if let shotCounterStream {
-                group.addTask { for await event in shotCounterStream { Self.emit(BleOutput.shotCounterLine(event)) } }
+            group.addTask {
+                for await event in shotCounterStream {
+                    if mode.includesDecoded { Self.emit(BleOutput.shotCounterLine(event)) }
+                    if let error = Self.giveUpError(for: event) { await stop.giveUp(error) }
+                }
             }
 
             let outcome: Outcome
@@ -79,35 +85,59 @@ struct BleListen: AsyncParsableCommand {
                 }
             }
 
+            let result: Outcome
             switch outcome {
             case .listening, .interrupted:
                 // Runs until the SIGINT teardown has completed (also when Ctrl-C arrived
-                // while startShotCounter() was still in flight).
-                await stop.waitForTeardown()
+                // while startShotCounter() was still in flight), or until the shot counter
+                // gives up (SPEC §10.3).
+                if let error = await stop.waitForEnd() {
+                    await client.disconnect()
+                    result = .gaveUp(error)
+                } else {
+                    result = outcome
+                }
             case .unsupported:
                 if await stop.interrupted {
                     await stop.waitForTeardown()
                 } else {
                     await client.disconnect()
                 }
+                result = .unsupported
+            case .gaveUp:
+                result = outcome   // not produced by startShotCounter()
             }
             // The teardown has emitted its final events (`.unsubscribed`, `.disconnected`, the
             // raw markers) into the buffers; the cancelled printers drain them, then end.
             group.cancelAll()
             try await group.waitForAll()
-            return outcome
+            return result
         }
 
-        if outcome == .unsupported, !(await stop.interrupted) {
+        let interrupted = await stop.interrupted
+        switch outcome {
+        case .gaveUp(let error):
+            // Printed to stderr by ArgumentParser ("Error: …"), exit status 1.
+            throw error
+        case .unsupported where !interrupted:
             Stderr.log("Shot counter not supported by this machine")
             throw ExitCode.failure
+        default:
+            Stderr.log("Connection closed.")
         }
-        Stderr.log("Connection closed.")
+    }
+
+    /// The SPEC §10.3 decision for one shot-counter event: `.gaveUp(error)` ends the run with the
+    /// mapped error (disconnect, non-zero exit, every output mode); any other event → nil, keep
+    /// listening.
+    static func giveUpError(for event: ShotCounterEvent) -> CLIError? {
+        guard case .gaveUp(let error) = event else { return nil }
+        return BleSession.cliError(error)
     }
 
     // MARK: Private
 
-    private enum Outcome: Equatable { case listening, unsupported, interrupted }
+    private enum Outcome { case listening, unsupported, interrupted, gaveUp(CLIError) }
 
     private static func emit(_ line: String?) {
         guard let line else {
@@ -126,29 +156,56 @@ struct BleListen: AsyncParsableCommand {
     }
 }
 
-/// The SIGINT handshake between the signal handler and `run()`: `interrupted` flips as soon as
-/// Ctrl-C arrives (before the teardown), and `waitForTeardown()` returns once it has finished.
-private actor StopSignal {
+/// The handshake between the SIGINT handler, the shot-counter printer and `run()`.
+///
+/// `interrupted` flips as soon as Ctrl-C arrives (before the teardown). `waitForEnd()` returns
+/// once the teardown has finished, or as soon as the shot counter gives up. Whichever comes
+/// first wins: a give-up during the SIGINT teardown is ignored (exit 0), and a Ctrl-C after a
+/// give-up starts no teardown (run() is already disconnecting).
+actor ListenStopSignal {
     private(set) var interrupted = false
     private var tornDown = false
+    private var gaveUpError: CLIError?
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    /// True for the first Ctrl-C only; later ones are ignored while the teardown runs.
+    /// True for the first Ctrl-C only, and only before a give-up; later ones are ignored.
     func beginTeardown() -> Bool {
-        guard !interrupted else { return false }
+        guard !interrupted, gaveUpError == nil else { return false }
         interrupted = true
         return true
     }
 
     func finishTeardown() {
         tornDown = true
+        resumeWaiters()
+    }
+
+    /// Records the first give-up, unless a SIGINT teardown already owns the shutdown.
+    func giveUp(_ error: CLIError) {
+        guard !interrupted, gaveUpError == nil else { return }
+        gaveUpError = error
+        resumeWaiters()
+    }
+
+    /// Returns once the SIGINT teardown has finished (nil) or the shot counter has given up
+    /// (the mapped error).
+    func waitForEnd() async -> CLIError? {
+        if gaveUpError == nil, !tornDown {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return gaveUpError
+    }
+
+    /// Returns once the SIGINT teardown has finished.
+    func waitForTeardown() async {
+        while !tornDown {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+    }
+
+    private func resumeWaiters() {
         let pending = waiters
         waiters = []
         for waiter in pending { waiter.resume() }
-    }
-
-    func waitForTeardown() async {
-        guard !tornDown else { return }
-        await withCheckedContinuation { waiters.append($0) }
     }
 }
