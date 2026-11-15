@@ -371,6 +371,31 @@ final class BluetoothResponseDecoderTests: XCTestCase {
         assertDecoding(try BluetoothResponseDecoder.boilers(Self.boil(steamTarget: #""0X10""#)), context: "boilers")
     }
 
+    /// Angstrom-only: §3.6 — a read or command-status response starting with a UTF-8 BOM is `.decoding`
+    /// (parity: `json.loads` raises "Unexpected UTF-8 BOM"; `JSONSerialization` alone accepts it)
+    func testBOMPrefixedResponsesRejected() throws {
+        let bom = "\u{FEFF}"
+        // Sanity: the same texts without the BOM decode, so the BOM alone causes the failure.
+        XCTAssertTrue(try BluetoothResponseDecoder.bool("true", setting: .tankStatus))
+        let status = #"{"id":"a","message":"m","status":"success"}"#
+        XCTAssertEqual(try BluetoothResponseDecoder.commandStatus(status),
+                       BluetoothCommandStatus(id: "a", message: "m", status: "success"))
+
+        assertDecoding(try BluetoothResponseDecoder.bool(bom + "true", setting: .tankStatus), context: "tankStatus")
+        assertDecoding(try BluetoothResponseDecoder.bool(bom + #""true""#, setting: .isPlumbedIn),
+                       context: "isPlumbedIn")
+        assertDecoding(try BluetoothResponseDecoder.commandStatus(bom + status), context: "command")
+        assertDecoding(try BluetoothResponseDecoder.machineMode(bom + #""BrewingMode""#), context: "machineMode")
+        assertDecoding(try BluetoothResponseDecoder.capabilities(bom + Self.capMicraText),
+                       context: "machineCapabilities")
+        assertDecoding(try BluetoothResponseDecoder.boilers(bom + Self.boilText), context: "boilers")
+        assertDecoding(try BluetoothResponseDecoder.boilers(bom + "[]"), context: "boilers")
+        assertDecoding(try BluetoothResponseDecoder.smartStandby(bom + #"{"mode":"PowerOn","minutes":42,"enabled":true}"#),
+                       context: "smartStandBy")
+        // A BOM alone is not an empty-but-valid reply either.
+        assertDecoding(try BluetoothResponseDecoder.bool(bom, setting: .tankStatus), context: "tankStatus")
+    }
+
     // MARK: - Helpers
 
     /// BT-RSP-CAP-001 bytes (TBC:342), verbatim.
