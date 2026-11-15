@@ -107,7 +107,9 @@ unit-tested in CI with fakes and cloud-only consumers never link CoreBluetooth.
   `===`; a single ordered `AsyncStream<LinkEvent>`), `BluetoothSleeper` (sleeps tagged by
   `SleepPurpose`), plus the public `BluetoothTransport` bundle (central + sleeper + `now`),
   `BluetoothPeripheralID` (the `CBPeer.identifier` UUID — not a MAC), `BluetoothAvailability`,
-  `BluetoothAuthorization`, `DiscoveredPeripheral` and the GATT-table types.
+  `BluetoothAuthorization`, `DiscoveredPeripheral` and the GATT-table types (service and
+  characteristic UUIDs are lowercase strings, always in the full 128-bit form — a 16- or 32-bit
+  SIG UUID is expanded with the Bluetooth base, `"180a"` → `"0000180a-0000-1000-8000-00805f9b34fb"`).
 - **`BluetoothAuthToken.swift`** — the opaque, non-`Codable` token whose `description`,
   `debugDescription` and mirror are redacted.
 - **`BluetoothEnums.swift`** / **`BluetoothModels.swift`** — `BluetoothReadSetting`,
@@ -117,8 +119,9 @@ unit-tested in CI with fakes and cloud-only consumers never link CoreBluetooth.
   result types (`BluetoothMachineCapabilities`, `BluetoothBoilerDetails`,
   `BluetoothSmartStandbyDetails`, `BluetoothCommandStatus`).
 - **`BluetoothWireCoercion.swift`** — mashumaro-parity value coercion for responses and
-  notifications (with the documented D5 differences: `"false"` is false, unknown enum entries are
-  `.other`, out-of-range/non-finite numbers fail instead of trapping or emitting NaN).
+  notifications, with the documented D5 differences (a)–(k) listed in `UPSTREAM.md` — among them
+  `"false"` is false, unknown enum entries are `.other`, out-of-range/non-finite numbers fail
+  instead of trapping or emitting NaN, and a list-typed field must be a JSON array.
 - **`BluetoothCodec.swift`** — the **only** producer of BLE command/request/auth bytes: ordered
   keys, Python `json.dumps` spacing and `ensure_ascii`, the trailing NUL, response NUL truncation.
 - **`BluetoothResponseDecoder.swift`** — read-setting and command-status decoding (tolerant parsing;
@@ -127,7 +130,9 @@ unit-tested in CI with fakes and cloud-only consumers never link CoreBluetooth.
   notification models, `ShotCounterEvent`, `BluetoothJSONValue`, `deriveState`, the
   `BrewingTracker` (earliest-estimate `brewingStartTime`) and `ShotCounterNotificationDecoder`.
 - **`BluetoothDiagnostics.swift`** — `RawBluetoothFrame` for the verbatim `rawFrames()` tap;
-  frames carrying the token (auth write, token read) set `isSecret` so displays can redact.
+  frames carrying the token set `isSecret` so displays can redact. Today only the auth write
+  reaches the tap (`readToken` is static and taps nothing); the rule stands for any token-read
+  frame a later version emits.
 - **`BluetoothOpTable.swift`** — the CB-free, exactly-once in-flight operation table the adapter
   uses (finish removes before resuming; abandoned ATT replies are counted and swallowed).
 - **`LaMarzoccoBluetoothClient.swift`** (+`+Requests`, `+ShotCounter`, `+Discovery`) — the public
@@ -136,7 +141,14 @@ unit-tested in CI with fakes and cloud-only consumers never link CoreBluetooth.
   typed reads and commands (a non-success status is *returned*), the shot counter with its
   reconnect loop (`shotCounterEvents()`, terminal `.gaveUp`), `rawFrames()`/`rawRead(_:)`, and the
   static `scanAll`/`discoverMachines`/`readToken`/`gattTable`. `isConnected` means an
-  **authenticated** link.
+  **authenticated** link. `.subscribed` is emitted only if the counter is still enabled once the
+  subscribe completes (a stop that lands mid-subscribe reports nothing). The reconnect loop creates
+  its availability stream and reads availability once at loop start, before the first backoff
+  sleep, so a power-off that caused the link loss still lets the next `.poweredOn` end the backoff
+  early (D14). The idle task and link watcher hold the actor weakly, so the actor's `deinit` does
+  the teardown when the client is released without `disconnect()`: it cancels the idle, link-watcher
+  and reconnect tasks, closes a live link fire-and-forget, and finishes every listener stream
+  (`connectionEvents()`, `shotCounterEvents()`, `rawFrames()`) without emitting an event.
 - **`Dashboard+Bluetooth.swift`** — pure transforms: `upserting`, `removingWidgets(code:)`,
   `settingMachineState`, `applyingBluetoothState(_:model:)` (upstream's
   `get_dashboard_from_bluetooth` widget synthesis) and `overlayingBluetoothBrewing(_:)` (the
@@ -148,7 +160,11 @@ The only target that imports CoreBluetooth (every file wrapped in `#if canImport
 `CoreBluetoothCentral.swift` / `CoreBluetoothLink.swift` are `@unchecked Sendable` classes
 confined to one private serial `DispatchQueue` (`"angstrom.bluetooth"`) that is both the
 `CBCentralManager` delegate queue and the home of all adapter state. Async bridging goes through
-`BluetoothOpTable`; every GATT op has a bounded timeout. `BluetoothTransport+CoreBluetooth.swift`
+`BluetoothOpTable`; every GATT op has a bounded timeout.
+The central keeps a queue-confined `[UUID: CBPeripheral]` retention map: emptied when the state
+drops to `.unknown`/`.resetting`/`.unsupported`/`.unauthorized`, and pruned at the start of every
+scan (entries with no live link and no pending connect are dropped, and are re-resolved by
+identifier on connect). `BluetoothTransport+CoreBluetooth.swift`
 is the public surface: `BluetoothTransport.coreBluetooth(showPowerAlert:)` (manager allocated
 lazily on first use; create once per process and share) and `BluetoothAuthorization.current`
 (never prompts). Apps that link it need `NSBluetoothAlwaysUsageDescription` (and, if
@@ -165,9 +181,16 @@ App-Sandboxed on macOS, the `com.apple.security.device.bluetooth` entitlement).
   actual socket health and freshness; `lastError` is cleared on the next success.
   Holds an optional cloud client and an optional `LaMarzoccoBluetoothClient`
   (`init(serialNumber:client:bluetooth:snapshot:)`; cloud-only calls throw
-  `.cloudOnlyFunctionality` without a cloud client). Every dashboard write goes through the
+  `.cloudOnlyFunctionality` without a cloud client — cloud resolution is the first step, before
+  model gating and argument guards, so a cloud-less machine always gets that error, as upstream's
+  outermost `@cloud_only` does). The BLE-only operations and `startShotCounter()` run inside the same
+  `lastError` capture as every other throwing operation: a failure (a missing BLE client included)
+  is recorded, a success clears it. Every dashboard write goes through the
   `setBaseDashboard`/`updateBaseDashboard` funnel into `baseDashboard`; the public `dashboard` is
-  rendered as `baseDashboard` + the BLE brewing overlay, and snapshots persist the base only.
+  rendered as `baseDashboard` + the BLE brewing overlay (what `refreshDashboard()` and
+  `refreshDashboardFromBluetooth()` return), and snapshots persist the base only. Tasks that
+  outlive one call (the connection observer, the shot-counter listener) capture `[weak self]` and
+  hold only the stream, never the client, so releasing the machine and the client releases both.
 - **`MachineBluetoothEvent.swift`** — the `bluetoothEvents()` stream's cases (`brewing`,
   `brewingCleared`, `telemetry`, Angstrom-only `shotCounterStopped`).
 - **`LaMarzoccoMachine+BluetoothCommands.swift`** — `bluetoothFirst(bluetooth:cloud:)`: the six
@@ -177,13 +200,17 @@ App-Sandboxed on macOS, the `com.apple.security.device.bluetooth` entitlement).
   `CommandResponse`.
 - **`LaMarzoccoMachine+BluetoothDashboard.swift`** — `refreshDashboardFromBluetooth()` and
   `refreshModelFromBluetooth()` (reads capabilities first when the model is unknown; no silent
-  Linea Micra default).
+  Linea Micra default; without a BLE client both throw
+  `.bluetoothConnectionFailed("Bluetooth client not initialized")`).
 - **`LaMarzoccoMachine+BluetoothConnection.swift`** — observes the BLE client's
   `connectionEvents()` into `isBluetoothConnected` (authenticated link);
   `bluetoothConnectionEvents()`.
 - **`LaMarzoccoMachine+ShotCounter.swift`** — `startShotCounter()`/`stopShotCounter()`, the
   overlay state (`bluetoothBrewingUpdate`, `isShotCounterActive`, `lastShotTime`), the telemetry
   merge (`bluetoothTelemetry`), the 60 s brewing-state expiry, and `bluetoothEvents()`.
+  `startShotCounter()` returns `false` without a BLE client; after a successful start
+  `isShotCounterActive` is read from the client's live state (a stop that raced the start leaves
+  it `false`).
 - **`MachineSnapshot.swift`** — `Codable {serialNumber, dashboard?, settings?, schedule?}` for
   stale-on-launch UI (recognized widgets round-trip losslessly; unknown widgets keep code/index
   but lose their raw payload). Unchanged by Bluetooth: no BLE state is persisted.
@@ -213,7 +240,9 @@ headers, and masks `bleAuthToken` and the STOMP bearer token in printed output. 
 is the BLE counterpart: scan for machines (`--all` unfiltered), dump the GATT table, read the
 token in pairing mode (masked unless `--show-secret`), raw + decoded reads, commands (which
 actuate hardware and refuse to run without `--confirm`), and `listen` for raw frames plus
-decoded connection/shot-counter events until SIGINT. The peripheral comes from `--peripheral`
+decoded connection/shot-counter events until SIGINT (if the shot counter gives up, `listen`
+prints the mapped error to stderr, disconnects and exits non-zero in every output mode). `ble`
+JSON lines are printed with sorted keys (key order is not part of the contract). The peripheral comes from `--peripheral`
 or a scan; the token from `--ble-token`, `LAMARZOCCO_BLE_TOKEN`, or the cloud. Neither is ever
 persisted, and every secret frame (`isSecret`, plus any `0d0b…` write or `0c0b…` read) is
 printed as `**REDACTED**`.

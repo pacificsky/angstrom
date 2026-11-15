@@ -310,7 +310,7 @@ callbacks), the legacy gen-1 GATT layout, bleak `pair()`, and the synthesized
   `startShotCounter` cannot "replace the callbacks". Re-entrant-stop recursion
   cannot happen. `_safe_call` is unnecessary. *Rationale:* house pattern
   (`dashboardUpdates()`/`connectionEvents()`); Swift concurrency.
-- **D5 — Coercion differences from mashumaro 3.17** (all executed against
+- **D5 — Coercion differences from mashumaro 3.17** (SPEC §3.10; all executed against
   `4c639ee`; vectors BT-COERCE / BT-NTF-COERCE):
   - (a) String booleans use `_parse_bool` (`"false"` → false; upstream
     `bool("false")` is `True`), so `{"BrewingUpdateGroup1Ev":"false",…}` stops a
@@ -337,8 +337,19 @@ callbacks), the legacy gen-1 GATT layout, bleak `pair()`, and the synthesized
     rule truncates it exactly (`3.9999999999999999999999` → 3, where Python's
     `int(float(…))` gives 4; `9223372036854775807.0` → `Int.max`, where Python
     gives 2⁶³), and the string rule renders any integral one as bare digits
-    (`5.00000000000000000000` → `"5"`, where Python gives `"5.0"`), because the
-    parsed number no longer records whether the literal had a fraction.
+    (`5.00000000000000000000` → `"5"`, where Python gives `"5.0"`;
+    `100000000000000000000.0` → `"100000000000000000000"`, where Python gives
+    `"1e+20"`), because the parsed number no longer records whether the literal
+    had a fraction.
+  - (h) Numeric strings written with non-ASCII Unicode digits (`"١"`, full-width
+    `"３.5"`) are an error, where Python accepts them.
+  - (i) A JSON object with a duplicate key keeps the **first** value
+    (`JSONSerialization`), where Python keeps the last.
+  - (j) A lone surrogate escape (`"\ud800"`) makes the whole payload
+    unparseable, where Python's `json.loads` accepts it.
+  - (k) A list-typed field (`boilers`, `machineModes`) must be a JSON array: an
+    object or a string there is `.decoding`, where upstream iterates whatever it
+    gets (`{}` and `""` become an empty list, a dict yields its keys).
 
   *Rationale:* (a) latent upstream bug; (b) tolerant-parsing convention;
   (c)–(f) Swift has no unbounded int, no Python `repr`, and `JSONSerialization`
@@ -355,7 +366,7 @@ callbacks), the legacy gen-1 GATT layout, bleak `pair()`, and the synthesized
     before dropping (upstream's `clear_cache` is a no-op on macOS).
   - (c) `didModifyServices` forces rediscovery.
   - (d) Cancellation inside a request is drop-class.
-  - (e) `ensureConnected` trusts the stored `link`: a request that starts after
+  - (e) `ensureConnected` trusts the stored `link` (SPEC §4.1 invariant I1): a request that starts after
     the peripheral dropped but before the actor processed `.disconnected` fails
     with `.bluetoothConnectionFailed` (drop-class; the device layer falls back to
     the cloud) instead of reconnecting, which upstream does because it checks
@@ -372,10 +383,10 @@ callbacks), the legacy gen-1 GATT layout, bleak `pair()`, and the synthesized
   are `Double` (upstream `int`, truncating). Identical for integral wire values.
   For others the derived steam level changes (`MACH:78-84,436-438`): `130.5` →
   upstream `int` 130 → `.level2`, Angstrom `.level3` (G-DEV-4, BT-DASH-STEAMLVL);
-  `0.5` → upstream 0 → `.level3`, Angstrom `.level1`. A string target `"127.5"`
-  fails the upstream read (`int("127.5")` raises, BT-COERCE-007); Angstrom
-  accepts `127.5`. *Rationale:* tolerant parsing, and no loss for fractional
-  targets.
+  `0.5` → upstream 0 → `.level3`, Angstrom `.level1`. A string target that
+  `float()` can parse but `int()` cannot (`"127.5"`, `"1e2"`) fails the upstream
+  read (`int("127.5")` raises, BT-COERCE-007); Angstrom accepts it (`127.5`,
+  `100.0`). *Rationale:* tolerant parsing, and no loss for fractional targets.
 - **D10 — Error taxonomy.** Swift enum cases (`.bluetoothConnectionFailed`,
   `.bluetoothAuthenticationFailed`, `.bluetoothUnavailable`, `.bluetoothTimedOut`,
   `.cloudOnlyFunctionality`) with `isBluetoothConnectionFailure` standing in for
