@@ -264,7 +264,10 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         rig.central.enqueueConnect(.failure(.timedOut("connect")))
         first.drop(.disconnected(code: 6))
 
-        await fulfillment(of: [events.expectation { $0.count >= 4 }], timeout: 5)
+        guard await fulfilled([events.expectation { $0.count >= 4 }], "resubscribed") else {
+            await client.disconnect()  // cancels a loop that never ends, so the drain cannot hang
+            return
+        }
         await client.drainBackgroundWorkForTesting()
         XCTAssertEqual(events.elements, [
             .subscribed,
@@ -316,7 +319,10 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
             rig.central.makeLink = { .laMarzocco(token: "other") }
             first.drop(.disconnected(code: 6))
 
-            await fulfillment(of: [events.expectation { $0.count >= 3 }], timeout: 5)
+            guard await fulfilled([events.expectation { $0.count >= 3 }], "gave up") else {
+                await client.disconnect()  // cancels a loop that never gives up, so the drain cannot hang
+                return
+            }
             await client.drainBackgroundWorkForTesting()
             XCTAssertEqual(events.elements, [.subscribed, .unsubscribed, .gaveUp(.bluetoothAuthenticationFailed)])
             XCTAssertEqual(rig.central.connectCount, 4, "initial connection + 3 failed reconnects")
@@ -360,7 +366,10 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
             }
             first.drop(nil)
 
-            await fulfillment(of: [events.expectation { $0.count >= 3 }], timeout: 5)
+            guard await fulfilled([events.expectation { $0.count >= 3 }], "gave up") else {
+                await client.disconnect()  // cancels a loop that never gives up, so the drain cannot hang
+                return
+            }
             await client.drainBackgroundWorkForTesting()
             XCTAssertEqual(events.elements, [
                 .subscribed, .unsubscribed,
@@ -500,10 +509,15 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1), .seconds(2)])
         XCTAssertEqual(rig.central.connectCount, 2)
 
-        // Off, then on again: the pending 2 s sleep ends without being fired.
+        // Off, then on again: the pending 2 s sleep ends without being fired. Without the cut the loop
+        // stays in that manual sleep, so bail out (disconnect cancels it) instead of hanging below.
         rig.central.setAvailability(.poweredOff)
         rig.central.setAvailability(.poweredOn)
-        await fulfillment(of: [secondAttempt], timeout: 5)
+        guard await fulfilled([secondAttempt], "the power-on cut the backoff short") else {
+            release.open()
+            await client.disconnect()
+            return
+        }
         XCTAssertEqual(rig.sleeper.pendingCount(.reconnectBackoff), 0, "the cut sleep is no longer pending")
         XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1), .seconds(2)], "the 2 s sleep was never fired")
         release.open()
@@ -515,7 +529,10 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         XCTAssertEqual(noAuth.recordedOps, [.discover(refresh: false), .disconnect])
 
         rig.sleeper.fire(.reconnectBackoff)
-        await fulfillment(of: [events.expectation { $0.count >= 3 }], timeout: 5)
+        guard await fulfilled([events.expectation { $0.count >= 3 }], "resubscribed") else {
+            await client.disconnect()  // cancels a loop still sleeping, so the test ends
+            return
+        }
         await client.drainBackgroundWorkForTesting()
         XCTAssertEqual(events.elements, [.subscribed, .unsubscribed, .subscribed])
         XCTAssertEqual(rig.central.connectCount, 4)
@@ -523,6 +540,139 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         XCTAssertTrue(active)
         XCTAssertEqual(rig.central.availabilitySubscriberCount, 0, "the loop's availability stream ends with the loop")
         await client.disconnect()
+    }
+
+    /// Angstrom-only: D14 — a power-off reported before the loop's availability stream existed (the adapter yields it in the same callback that drops the link) still arms the cut-short: the loop reads the state once at its start
+    func testPowerOffBeforeLossArmsCutShort() async throws {
+        let rig = makeRig(manual: [.idleDisconnect, .reconnectBackoff])
+        let client = rig.client
+        var timing = BluetoothTiming()
+        timing.connectAttempts = 1
+        await client.setTimingForTesting(timing)
+        let events = Recorder(await client.shotCounterEvents())
+        let first = FakeBluetoothLink.laMarzocco(token: "token")
+        rig.central.enqueueConnect(.success(first))
+        let started = try await client.startShotCounter()
+        XCTAssertTrue(started)
+
+        // The radio goes off while no availability stream exists, so no stream ever sees this value:
+        // the loop can only learn it from its one read. Then the link is lost.
+        XCTAssertEqual(rig.central.availabilitySubscriberCount, 0, "premise: nobody observes the power-off")
+        rig.central.setAvailability(.poweredOff)
+        first.drop(.disconnected(code: 6))
+
+        // Attempt 1 runs with the radio off: `.bluetoothUnavailable` (connection class) doubles the delay.
+        await rig.sleeper.waitForPending(.reconnectBackoff, count: 1)
+        XCTAssertGreaterThanOrEqual(rig.central.availabilitySubscriberCount, 1)
+        XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1)])
+        rig.sleeper.fire(.reconnectBackoff)
+        await rig.sleeper.waitForPending(.reconnectBackoff, count: 1)
+        XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1), .seconds(2)])
+        XCTAssertEqual(rig.central.connectCount, 1, "no connect attempt while powered off")
+
+        // Attempt 2 (right after the cut) fails discovery and tells the test it started; attempt 3 succeeds.
+        let secondAttempt = expectation(description: "attempt after the power-on")
+        let noAuth = FakeBluetoothLink()
+        noAuth.present = [BluetoothConstants.readCharacteristic, BluetoothConstants.writeCharacteristic,
+                          BluetoothConstants.shotCounterCharacteristic]
+        let release = Latch()
+        noAuth.beforeOp = { op in
+            guard op == .discover(refresh: false) else { return }
+            secondAttempt.fulfill()
+            await release.wait()  // held until the test has looked at the sleeper
+        }
+        rig.central.enqueueConnect(.success(noAuth))
+
+        // Only `.poweredOn` is ever yielded on the loop's stream: the pending 2 s sleep ends unfired.
+        rig.central.setAvailability(.poweredOn)
+        guard await fulfilled([secondAttempt], "the power-on cut the backoff short") else {
+            release.open()
+            await client.disconnect()  // cancels the loop's manual sleep, so the test ends
+            return
+        }
+        XCTAssertEqual(rig.sleeper.pendingCount(.reconnectBackoff), 0, "the cut sleep is no longer pending")
+        XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1), .seconds(2)], "the 2 s sleep was never fired")
+        release.open()
+
+        // Attempt 2 failed after the reset: 1 s doubled to 2 s (without the reset it would be 4 s).
+        await rig.sleeper.waitForPending(.reconnectBackoff, count: 1)
+        XCTAssertEqual(rig.sleeper.requested(.reconnectBackoff), [.seconds(1), .seconds(2), .seconds(2)])
+        XCTAssertEqual(rig.central.connectCount, 2)
+        XCTAssertEqual(noAuth.recordedOps, [.discover(refresh: false), .disconnect])
+
+        rig.sleeper.fire(.reconnectBackoff)
+        guard await fulfilled([events.expectation { $0.count >= 3 }], "resubscribed") else {
+            await client.disconnect()
+            return
+        }
+        await client.drainBackgroundWorkForTesting()
+        XCTAssertEqual(events.elements, [.subscribed, .unsubscribed, .subscribed])
+        XCTAssertEqual(rig.central.connectCount, 3)
+        let active = await client.shotCounterActive
+        XCTAssertTrue(active)
+        await client.disconnect()
+    }
+
+    /// Angstrom-only: §4.9 step 3 — a stop that lands while the subscribe is in flight: start still returns true, but neither `.subscribed` nor `.unsubscribed` is emitted, and the stop unsubscribes
+    func testStopDuringSubscribeEmitsNothing() async throws {
+        let rig = makeRig()
+        let client = rig.client
+        let events = Recorder(await client.shotCounterEvents())
+        let raw = Recorder(await client.rawFrames())
+        let link = FakeBluetoothLink.laMarzocco(token: "token")
+        let subscribeHeld = expectation(description: "the subscribe is in flight")
+        subscribeHeld.assertForOverFulfill = false  // the restart subscribes again
+        let releaseSubscribe = Latch()
+        link.beforeOp = { op in
+            guard case .subscribe = op else { return }
+            subscribeHeld.fulfill()
+            await releaseSubscribe.wait()
+        }
+        rig.central.enqueueConnect(.success(link))
+
+        let starter = Task { try await client.startShotCounter() }
+        await fulfillment(of: [subscribeHeld], timeout: 5)
+
+        // Stop while the subscribe holds the connection gate: disabled at once, then queued on the gate.
+        let stopEntered = expectation(description: "stop entered")
+        let stopper = Task { await client.stopShotCounterSignalling { stopEntered.fulfill() } }
+        await fulfillment(of: [stopEntered], timeout: 5)
+        let stopping = await client.peek {
+            ($0.shotCounterEnabled, $0.shotCounterSubscribed, $0.gateWaiters[.connection]?.count ?? 0)
+        }
+        XCTAssertFalse(stopping.0, "the stop disabled the counter before waiting for the gate")
+        XCTAssertFalse(stopping.1, "the subscribe has not completed")
+        XCTAssertEqual(stopping.2, 1, "the stop waits behind the subscribe")
+
+        releaseSubscribe.open()
+        let started = try await starter.value
+        XCTAssertTrue(started, "the subscribe itself succeeded (parity: start returns true)")
+        await stopper.value
+
+        // The stop unsubscribed the subscription that completed under it.
+        XCTAssertEqual(Array(link.recordedOps.suffix(2)), [.subscribe(shotCounter), .unsubscribe(shotCounter)])
+        await fulfillment(of: [raw.expectation { frames in
+            let markers = frames.map(Self.describe)
+            return markers.contains(RawBluetoothFrame.subscribedMarker) && markers.contains(RawBluetoothFrame.unsubscribedMarker)
+        }], timeout: 5)
+        let state = await client.peek {
+            ($0.shotCounterEnabled, $0.shotCounterSubscribed, $0.shotCounterActive, $0.isConnected, $0.reconnectTask == nil)
+        }
+        XCTAssertFalse(state.0)
+        XCTAssertFalse(state.1)
+        XCTAssertFalse(state.2)
+        XCTAssertTrue(state.3, "the link stays up")
+        XCTAssertTrue(state.4)
+
+        // Restart: its `.subscribed` is the first event, so the stopped start emitted nothing (neither
+        // `.subscribed` nor an `.unsubscribed`).
+        let restarted = try await client.startShotCounter()
+        XCTAssertTrue(restarted)
+        await fulfillment(of: [events.expectation { !$0.isEmpty }], timeout: 5)
+        await client.disconnect()
+        await fulfillment(of: [events.expectation { $0.count >= 2 }], timeout: 5)
+        XCTAssertEqual(events.elements, [.subscribed, .unsubscribed])
+        XCTAssertEqual(rig.central.connectCount, 1)
     }
 
     /// Angstrom-only: §4.13 — a stop that lands while the loop's connection-error branch waits for the connection gate is not followed by a disconnect: the link the gate holder connected meanwhile survives
@@ -629,6 +779,19 @@ final class BluetoothClientShotCounterSmokeTests: XCTestCase {
         let client = LaMarzoccoBluetoothClient(transport: .fake(central, sleeper: sleeper, clock: clock),
                                                peripheral: .fake, token: BluetoothAuthToken("token"))
         return Rig(central: central, sleeper: sleeper, client: client)
+    }
+
+    /// `fulfillment(of:timeout:)` that also reports whether everything was fulfilled, so a test can stop
+    /// (cancelling its background work) instead of hanging in a later unbounded wait such as
+    /// `drainBackgroundWorkForTesting()` on a reconnect loop stuck in a manual sleep.
+    private func fulfilled(_ expectations: [XCTestExpectation], _ message: String, timeout: TimeInterval = 5,
+                           file: StaticString = #filePath, line: UInt = #line) async -> Bool {
+        let result = await XCTWaiter().fulfillment(of: expectations, timeout: timeout)
+        guard result == .completed else {
+            XCTFail("\(message): \(result)", file: file, line: line)
+            return false
+        }
+        return true
     }
 
     /// A raw frame as text: the marker for `.event`, else `<kind> <characteristic> <UTF-8 data>`.

@@ -84,7 +84,12 @@ extension LaMarzoccoBluetoothClient {
                 continue
             case .subscribed:
                 log?("Subscribed to shot counter on \(peripheral)")
-                emitShotCounter(.subscribed)
+                // §4.9 step 3: a stop that landed while the subscribe was in flight reports nothing. It
+                // saw nothing subscribed, so no `.unsubscribed` would ever pair this event (upstream's
+                // `_disable_shot_counter` has already cleared the connection callback, `BT:385-388`).
+                if shotCounterEnabled {
+                    emitShotCounter(.subscribed)
+                }
                 return true
             }
         }
@@ -152,6 +157,12 @@ extension LaMarzoccoBluetoothClient {
         // reads it for the whole run, so no change is lost between two sleeps.
         let poweredOn = PoweredOnSignal()
         let updates = central.availabilityUpdates()
+        // Read ONCE, after creating the stream (the §4.2 step 3 pattern): a power-off that caused this
+        // link loss was yielded before the stream existed, so only this read can see it (D14). It is
+        // observed before the monitor starts and the stream buffers every change, so the signal sees
+        // the read first and then the changes in order. The read can only arm (a non-`.poweredOn`
+        // state), never disarm or fire: observing `.poweredOn` with nothing armed is a no-op.
+        poweredOn.observe(await central.availability())
         let monitor = Task {
             for await state in updates {
                 poweredOn.observe(state)
