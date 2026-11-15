@@ -162,6 +162,40 @@ final class BluetoothDeviceStateTests: XCTestCase {
         XCTAssertEqual(harness.central.connectCount, 5)
     }
 
+    /// Angstrom-only: G-DEV-9 — a machine created on a *disconnected* client is seeded `false` from the
+    /// client's `isConnected` and stays `false` until a connection event (the counterpart of the
+    /// already-connected `late` machine above).
+    ///
+    /// The default is already `false`, so the test first sets the property to `true` synchronously,
+    /// before the observation task can run: with no client activity, only the seed can bring it back
+    /// to `false`, which makes the seed's value observable (a seed that ignored the client, or was
+    /// skipped, leaves it `true`).
+    func testIsBluetoothConnectedSeedsFalseFromDisconnectedClient() async throws {
+        let harness = BluetoothMachineHarness(cloud: false, bluetooth: true, settingResponses: modeResponses)
+        let bluetooth = try XCTUnwrap(harness.bluetooth)
+
+        let machine = LaMarzoccoMachine(serialNumber: BluetoothMachineHarness.serial, client: nil,
+                                        bluetooth: bluetooth)
+        XCTAssertNotNil(machine.bluetoothConnectionTask)
+        XCTAssertFalse(machine.isBluetoothConnected)
+        machine.isBluetoothConnected = true   // no suspension since `init`: the task has not run yet
+
+        // The seed reads the disconnected client and writes `false`.
+        await waitForBluetoothConnected(machine, false)
+        let clientConnected = await bluetooth.isConnected
+        XCTAssertFalse(clientConnected)
+        XCTAssertEqual(harness.central.connectCount, 0, "nothing connected the client")
+
+        // It stays `false` with no event (a client round trip later), then follows the client's events.
+        _ = await bluetooth.isConnected
+        XCTAssertFalse(machine.isBluetoothConnected)
+        _ = try await bluetooth.machineMode()
+        await waitForBluetoothConnected(machine, true)
+        await bluetooth.disconnect()
+        await waitForBluetoothConnected(machine, false)
+        XCTAssertEqual(harness.central.connectCount, 1)
+    }
+
     // MARK: - Lifetime
 
     /// Angstrom-only: §6.16 — the observation holds the machine weakly: a dropped machine deallocates,
