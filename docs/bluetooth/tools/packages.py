@@ -1196,7 +1196,7 @@ pkg(id="BT-W5-01", title="Final integration: all gates, docs, iOS, release build
     deliverables=["Release-candidate report (§5.2 schema, plus `gates`, `coverage` and `hardwareHandoff` arrays); no repository change."],
     task=(
         "On a fresh worktree of bluetooth/integration, run every acceptance command below and report each command with its exit status and a log excerpt. "
-        "Coverage audit: every upstream test function in PLAN §7.2 has a Swift test whose doc comment starts `/// Upstream: <function> (`, and every Swift test of PLAN §7.2 exists as `func <method>(` in a file that declares `class <Class>`. Ownership audit: every path changed since e1bc403 is owned by some package in work-packages.json (or is one of the three docs/bluetooth files). Confirm that ci.yml is unchanged and that none of the SPEC §7.1 'MUST NOT change' files changed. "
+        "Coverage audit: every upstream test function in PLAN §7.2 has a Swift test whose doc comment starts `/// Upstream: <function> (`, and every Swift test of PLAN §7.2 exists as `func <method>(` in a file that declares `class <Class>`. Ownership audit: every path changed since e1bc403 is owned by some package in work-packages.json (or is a planning file under docs/bluetooth/, or .gitignore). Confirm that ci.yml is unchanged and that none of the SPEC §7.1 'MUST NOT change' files changed. "
         "Then prepare the hardware handoff: list H1–H28 and X1–X6 (PLAN §6) with the exact command lines for the human, and say whether an iOS app for H2/H21 exists. "
         "You change nothing; failures become findings with fix owners (Appendix A)."),
     extraTests=[], tests=[],
