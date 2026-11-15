@@ -949,7 +949,8 @@ final class ShotCounterOverlayTests: XCTestCase {
             XCTAssertNotNil(machine.bluetoothBrewingUpdate)
 
             // Isolate the shot-counter tasks: end the machine's connection observer (§6.16, not part of
-            // the shot counter), whose closure captures the client for the task's life.
+            // the shot counter), whose closure captures the client for the task's life — a BT-W3-06 defect
+            // proven by testConnectionObserverDoesNotRetainClient below.
             let observer = try XCTUnwrap(machine.bluetoothConnectionTask)
             observer.cancel()
             await observer.value
@@ -968,6 +969,53 @@ final class ShotCounterOverlayTests: XCTestCase {
         await expiry.value
         XCTAssertEqual(log.events, [.brewing(update(.brewing, timer: 3))])
         log.cancel()
+    }
+
+    /// Angstrom-only: §5.5 — the machine's connection observer holds only the event stream, never the
+    /// Bluetooth client: releasing the machine together with its client, with the observer alive and not
+    /// cancelled, deallocates the client, whose teardown then finishes the stream and ends the observer.
+    /// (The regression test for the review finding behind the explicit cancel in the test above.)
+    func testConnectionObserverDoesNotRetainClient() async throws {
+        try XCTSkipIf(true, """
+            BLOCKED-BY BT-W3-06: startObservingBluetoothConnection() captures the Bluetooth client strongly \
+            in bluetoothConnectionTask for the task's life (LaMarzoccoMachine+BluetoothConnection.swift:30), \
+            so a released machine and client never deallocate (SPEC §5.5 isolation table). \
+            BLOCKED-BY BT-W1-09: LaMarzoccoBluetoothClient has no deinit teardown, so a released client \
+            never finishes its connectionEvents() continuations and the observer never ends (SPEC §5.5 Lifetime).
+            """)
+        var harness: BluetoothMachineHarness? = BluetoothMachineHarness(
+            cloud: false, bluetooth: true, settingResponses: bluetoothDashboardReplies(mode: "BrewingMode"))
+        weak var weakMachine: LaMarzoccoMachine?
+        weak var weakClient: LaMarzoccoBluetoothClient?
+        let observer: Task<Void, Never>
+        do {
+            let machine = try XCTUnwrap(harness?.machine)
+            let client = try XCTUnwrap(harness?.bluetooth)
+            weakMachine = machine
+            weakClient = client
+            observer = try XCTUnwrap(machine.bluetoothConnectionTask)
+
+            // Drive one connect/disconnect cycle so the observer has registered, seeded and handled both
+            // events: it is now parked in its `for await`, past every use of the client.
+            _ = try await client.machineMode()
+            try await awaitState("isBluetoothConnected == true") { machine.isBluetoothConnected }
+            await client.disconnect()
+            try await awaitState("isBluetoothConnected == false") { !machine.isBluetoothConnected }
+        }
+
+        // Release the machine and its client together, without cancelling the observer.
+        harness = nil
+        XCTAssertNil(weakMachine, "the connection observer must not keep the machine alive")
+        XCTAssertNil(weakClient, "the connection observer must not keep the Bluetooth client alive")
+        XCTAssertFalse(observer.isCancelled)
+
+        // The client's teardown finished the observer's stream, so the task ends on its own.
+        let ended = XCTestExpectation(description: "connection observer ended")
+        Task {
+            await observer.value
+            ended.fulfill()
+        }
+        await fulfillment(of: [ended], timeout: hangGuard)
     }
 
     // MARK: - Helpers
