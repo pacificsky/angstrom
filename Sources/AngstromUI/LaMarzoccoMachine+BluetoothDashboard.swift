@@ -17,11 +17,40 @@ extension LaMarzoccoMachine {
     /// - It doesn't stamp ``lastUpdateAt`` (a cloud freshness signal) and leaves ``settings``,
     ///   ``schedule`` and the machine's identity and cloud connectivity untouched.
     ///
+    /// - Like every other throwing operation on the machine (SPEC §4.15), a failure — the missing-client
+    ///   error included — is recorded in ``lastError`` before it is rethrown, and a success clears it.
+    ///
     /// - Returns: The rendered ``dashboard`` (base + the Bluetooth brewing overlay).
     /// - Throws: `LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")` without a
     ///   Bluetooth client; otherwise whatever the Bluetooth reads throw.
     @discardableResult
     public func refreshDashboardFromBluetooth() async throws -> Dashboard {
+        try await capturing { try await performRefreshDashboardFromBluetooth() }
+    }
+
+    /// Resolve the model from the machine's Bluetooth capabilities (upstream `get_model_info_from_bluetooth`).
+    ///
+    /// Reads `machineCapabilities` and sets only the base dashboard's `machine.model` to the reported
+    /// family (creating an empty dashboard when there is none). No other capability field is stored.
+    /// A failure — the missing-client error included — is recorded in ``lastError`` before it is
+    /// rethrown, and a success clears it (SPEC §4.15).
+    ///
+    /// - Returns: The capabilities as read.
+    /// - Throws: `LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")` without a
+    ///   Bluetooth client; otherwise whatever the read throws (an unknown family is
+    ///   `LaMarzoccoError.decoding`), with no change to the dashboard.
+    @discardableResult
+    public func refreshModelFromBluetooth() async throws -> BluetoothMachineCapabilities {
+        try await capturing { try await performRefreshModelFromBluetooth() }
+    }
+
+    // MARK: - Uncaptured bodies
+    //
+    // The public methods wrap these in `capturing`. The dashboard refresh calls the model body directly
+    // (not the public method), so `lastError` is written exactly once per public call: no intermediate
+    // clear after a successful capabilities read that a later read failure would then overwrite.
+
+    private func performRefreshDashboardFromBluetooth() async throws -> Dashboard {
         guard let bluetooth else {
             throw LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")
         }
@@ -31,7 +60,7 @@ extension LaMarzoccoMachine {
         if let known = model, !Self.isUnknown(known) {
             resolvedModel = known
         } else {
-            resolvedModel = try await refreshModelFromBluetooth().family
+            resolvedModel = try await performRefreshModelFromBluetooth().family
         }
 
         // Reads, in upstream order (MACH:356-364). Any error propagates before any mutation.
@@ -58,17 +87,7 @@ extension LaMarzoccoMachine {
         return dashboard ?? updated
     }
 
-    /// Resolve the model from the machine's Bluetooth capabilities (upstream `get_model_info_from_bluetooth`).
-    ///
-    /// Reads `machineCapabilities` and sets only the base dashboard's `machine.model` to the reported
-    /// family (creating an empty dashboard when there is none). No other capability field is stored.
-    ///
-    /// - Returns: The capabilities as read.
-    /// - Throws: `LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")` without a
-    ///   Bluetooth client; otherwise whatever the read throws (an unknown family is
-    ///   `LaMarzoccoError.decoding`), with no change to the dashboard.
-    @discardableResult
-    public func refreshModelFromBluetooth() async throws -> BluetoothMachineCapabilities {
+    private func performRefreshModelFromBluetooth() async throws -> BluetoothMachineCapabilities {
         guard let bluetooth else {
             throw LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")
         }

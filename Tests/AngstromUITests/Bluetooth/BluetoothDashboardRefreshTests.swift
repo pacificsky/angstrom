@@ -1,4 +1,5 @@
 import XCTest
+import Observation
 @testable import Angstrom
 @testable import AngstromUI
 import AngstromTestSupport
@@ -674,6 +675,102 @@ final class BluetoothDashboardRefreshTests: XCTestCase {
         XCTAssertEqual(machine.bluetoothBrewingUpdate, update, "the refresh doesn't clear the overlay")
     }
 
+    /// Angstrom-only: §4.15 — both BLE-only operations run inside `capturing`: a failure (the
+    /// missing-client error included) is recorded in `lastError` before it is rethrown, with the
+    /// dashboard and model left as §4.17/§4.18 say; a success clears a previously recorded `lastError`.
+    func testLastErrorRecordedAndCleared() async throws {
+        let expectedMissing = LaMarzoccoError.bluetoothConnectionFailed("Bluetooth client not initialized")
+        let seed = BluetoothMachineHarness.seedDashboard(model: .lineaMicra)
+        let responses: [BluetoothReadSetting: Data] = [
+            .machineCapabilities: capabilitiesReply(family: "GS3"),
+            .machineMode: Data(#""BrewingMode""#.utf8),
+            .isPlumbedIn: Data("false".utf8),
+            .tankStatus: Data(#""true""#.utf8),
+            .boilers: boilersReply([("CoffeeBoiler1", true, 95, 94), ("SteamBoiler", false, 128, 50)]),
+        ]
+        let gatt = BluetoothTransportError.gatt(domain: "CBATTErrorDomain", code: 14)
+
+        // 1. The missing-client error is recorded by both methods (with and without a cloud client).
+        let noClient = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, bluetooth: false)
+        XCTAssertNil(noClient.machine.lastError)
+        _ = await captureError { try await noClient.machine.refreshDashboardFromBluetooth() }
+        XCTAssertEqual(noClient.machine.lastError as? LaMarzoccoError, expectedMissing)
+        noClient.machine.lastError = nil
+        _ = await captureError { try await noClient.machine.refreshModelFromBluetooth() }
+        XCTAssertEqual(noClient.machine.lastError as? LaMarzoccoError, expectedMissing)
+        XCTAssertEqual(noClient.machine.baseDashboard, seed)
+        let bare = BluetoothMachineHarness(seed: .none, cloud: false, bluetooth: false)
+        _ = await captureError { try await bare.machine.refreshDashboardFromBluetooth() }
+        XCTAssertEqual(bare.machine.lastError as? LaMarzoccoError, expectedMissing)
+        XCTAssertNil(bare.machine.baseDashboard)
+
+        // 2. A failed dashboard read records the thrown error; the dashboard and model are unchanged.
+        let failedRead = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, settingResponses: responses)
+        failReads(of: .tankStatus, with: gatt, in: failedRead)
+        let readError = await captureError { try await failedRead.machine.refreshDashboardFromBluetooth() }
+        XCTAssertEqual(readError as? LaMarzoccoError, .bluetoothConnectionFailed(gatt.description))
+        XCTAssertEqual(failedRead.machine.lastError as? LaMarzoccoError, .bluetoothConnectionFailed(gatt.description))
+        XCTAssertEqual(failedRead.machine.baseDashboard, seed)
+        XCTAssertEqual(failedRead.machine.dashboard, seed)
+        XCTAssertEqual(failedRead.machine.model, .lineaMicra)
+
+        // 3. A failed capabilities read records the thrown error; the model is unchanged.
+        let failedModel = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, settingResponses: responses)
+        failReads(of: .machineCapabilities, with: gatt, in: failedModel)
+        _ = await captureError { try await failedModel.machine.refreshModelFromBluetooth() }
+        XCTAssertEqual(failedModel.machine.lastError as? LaMarzoccoError, .bluetoothConnectionFailed(gatt.description))
+        XCTAssertEqual(failedModel.machine.model, .lineaMicra)
+        XCTAssertEqual(failedModel.machine.baseDashboard, seed)
+
+        // 4. Unknown model, capabilities succeed, a later read fails: the later error is recorded, written
+        //    exactly once (no intermediate clear from the internal model step), and the model write stands.
+        let unknownSeed = Self.seed(model: .unknown("X"))
+        let nested = BluetoothMachineHarness(model: .unknown("X"), seed: .custom(unknownSeed),
+                                             settingResponses: responses)
+        failReads(of: .machineMode, with: .timedOut("read"), in: nested)
+        let sentinel = LaMarzoccoError.decoding("sentinel")
+        nested.machine.lastError = sentinel
+        let writes = LastErrorWriteCounter(nested.machine)
+        let nestedError = await captureError { try await nested.machine.refreshDashboardFromBluetooth() }
+        XCTAssertEqual(nestedError as? LaMarzoccoError, .bluetoothTimedOut("read"))
+        XCTAssertEqual(nested.machine.lastError as? LaMarzoccoError, .bluetoothTimedOut("read"))
+        XCTAssertEqual(writes.count, 1, "lastError written once per public call")
+        XCTAssertEqual(nested.machine.model, .gs3AV)
+        XCTAssertEqual(readRequests(nested), frames([.machineCapabilities, .machineMode]))
+
+        // 5. Unknown model, the capabilities read fails inside the dashboard refresh: recorded once.
+        let nestedModel = BluetoothMachineHarness(model: .unknown("X"), seed: .custom(unknownSeed),
+                                                  settingResponses: responses)
+        failReads(of: .machineCapabilities, with: gatt, in: nestedModel)
+        nestedModel.machine.lastError = sentinel
+        let modelWrites = LastErrorWriteCounter(nestedModel.machine)
+        _ = await captureError { try await nestedModel.machine.refreshDashboardFromBluetooth() }
+        XCTAssertEqual(nestedModel.machine.lastError as? LaMarzoccoError, .bluetoothConnectionFailed(gatt.description))
+        XCTAssertEqual(modelWrites.count, 1, "lastError written once per public call")
+        XCTAssertEqual(nestedModel.machine.baseDashboard, unknownSeed)
+
+        // 6. A success clears a previously recorded error: the dashboard refresh (with an undecodable
+        //    plumb-in reply, which is not an error) and the model refresh.
+        var tolerant = responses
+        tolerant[.isPlumbedIn] = Data("bad".utf8)
+        let success = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, settingResponses: tolerant)
+        success.machine.lastError = sentinel
+        try await success.machine.refreshDashboardFromBluetooth()
+        XCTAssertNil(success.machine.lastError)
+        success.machine.lastError = sentinel
+        try await success.machine.refreshModelFromBluetooth()
+        XCTAssertNil(success.machine.lastError)
+        XCTAssertEqual(success.machine.model, .gs3AV)
+
+        // 7. A successful dashboard refresh that resolves an unknown model first also clears it.
+        let resolved = BluetoothMachineHarness(model: .unknown("X"), seed: .custom(unknownSeed),
+                                               settingResponses: responses)
+        resolved.machine.lastError = sentinel
+        try await resolved.machine.refreshDashboardFromBluetooth()
+        XCTAssertNil(resolved.machine.lastError)
+        XCTAssertEqual(resolved.machine.model, .gs3AV)
+    }
+
     // MARK: - Private helpers
 
     /// `Machine(serialNumber:model:)` with no widgets.
@@ -767,5 +864,31 @@ private final class LastRequestedSetting: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return value
+    }
+}
+
+/// Counts every write to `machine.lastError` through Observation: each change re-arms the tracking, so
+/// two writes (e.g. a clear followed by a set) count as two even when the final value is the same.
+@MainActor
+private final class LastErrorWriteCounter {
+    private(set) var count = 0
+    private weak var machine: LaMarzoccoMachine?
+
+    init(_ machine: LaMarzoccoMachine) {
+        self.machine = machine
+        track()
+    }
+
+    private func track() {
+        guard let machine else { return }
+        withObservationTracking {
+            _ = machine.lastError
+        } onChange: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.count += 1
+                self.track()
+            }
+        }
     }
 }
