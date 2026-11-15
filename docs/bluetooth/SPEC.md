@@ -18,7 +18,9 @@
 > (`isShotCounterActive` from the client's live state after a start), §10.3 (key order not part of
 > the contract; `char`, `text` and `value` rules). From the Wave 3 reviews: §4.15 (the BLE-only
 > operations and `startShotCounter()` record and clear `lastError`), §4.13 (vector connect counts
-> are upstream's), §9.4 (C37/C38 line).
+> are upstream's), §9.4 (C37/C38 line). From the Wave 4 verify packages: §5.5 (lifetime: client
+> `deinit` teardown; long-lived machine tasks do not retain the client), §5.7 (token-read frames),
+> §12 D5 (sub-items in order), wording in §1.4, §2.1 and §4.15.
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -151,7 +153,9 @@ is **informational only**. Nothing gates on it (parity: `TM:745-762`).
 
 Legend: **BT→C** = Bluetooth first, cloud fallback (§4.16). **C** = cloud only (throws
 `.cloudOnlyFunctionality` without a cloud client). **BT** = Bluetooth only (throws
-`.bluetoothConnectionFailed("Bluetooth client not initialized")` without a BLE client).
+`.bluetoothConnectionFailed("Bluetooth client not initialized")` without a BLE client; the
+shot-counter row is the exception: `startShotCounter()` returns `false` and `stopShotCounter()` does
+nothing, §4.15).
 
 | Operation (AngstromUI `LaMarzoccoMachine`) | Bluetooth wire op | Cloud command | Routing | Gate | Upstream |
 |---|---|---|---|---|---|
@@ -231,7 +235,7 @@ Every upstream Bluetooth symbol and behaviour, mapped to its Angstrom counterpar
 | `__send_command` (`702-710`) | `sendCommand(_:)` | +Requests |
 | `_resolve_characteristic` (`712-747`) | `resolve(_:on:)` (§4.5, D7) | +Requests |
 | `disconnect_on_exception` decorator (`114-136`) | the request wrapper `request(_:frame:)` (§4.4) | +Requests |
-| `_BrewingTracker` (`77-111`) | `package struct BrewingTracker` | BT/BrewingTracker.swift |
+| `_BrewingTracker` (`77-111`) | `package struct BrewingTracker` | BT/BrewingStateMachine.swift |
 | `_parse_bool` (`62-64`) | `BluetoothWireCoercion.parseBool(_:)` | BT/BluetoothWireCoercion.swift |
 | `_safe_call` (`67-74`) | not needed: there are no user callbacks; stream consumers can't throw into the client (D4) | — |
 | `_utcnow` (`57-59`) | `BluetoothTransport.now` (injected clock) | BT/BluetoothTransport.swift |
@@ -1030,7 +1034,8 @@ sleeper.
   All three run inside `capturing`, like every other throwing operation on the machine: a failure
   (the missing-client error included) is recorded in `lastError` before it is rethrown, and a
   success (a `false` from `startShotCounter()` included) clears it. Angstrom-only: upstream has no
-  `lastError`. "No mutation" on a failed read (§4.17 step 4) refers to the dashboard and model.
+  `lastError`. "No mutation" on a failed read (§4.17 step 4) refers to the dashboard: a failed
+  step-3 read leaves it unchanged, apart from a model that step 2 already wrote.
 - **Model gating** uses `model` as today (dashboard ?? settings ?? schedule). If the model is
   unknown, `requireModel` throws `.unsupportedModel`. There is no silent Linea Micra default (D17).
 - If a BLE client is present, `init` starts observing `bluetooth.connectionEvents()` and sets
@@ -1393,9 +1398,17 @@ the core `BluetoothOpTable`. Nothing in this spec depends on the sketch being av
 | `LaMarzoccoBluetoothClient` | `public actor` | Upstream's two `asyncio.Lock`s become two FIFO continuation gates (actor reentrancy at `await` would otherwise break request atomicity, `TBC:1253-1284`). Background work (drops, reconnect) runs in unstructured `Task`s that inherit the actor, tracked in `backgroundTasks` for tests; the idle task and the link watcher capture `[weak self]` and are therefore not actor-isolated (their awaits are real hops). |
 | Link watcher | `Task` per link | `linkWatcher = Task { [weak self] in for await e in link.events { await self?.handleLinkEvent(e, from: link) } }`. With `[weak self]` the closure is not actor-isolated, so the `await` is a real hop. A strong `self` would inherit the actor and make the `await` on the synchronous `handleLinkEvent` a warning (`#UnnecessaryEffectMarker`, gate G5). |
 | Adapter | private serial `DispatchQueue` | §5.4 |
-| `LaMarzoccoMachine` | `@MainActor @Observable` (unchanged) | consumes client streams in `Task`s with `[weak self]` |
+| `LaMarzoccoMachine` | `@MainActor @Observable` (unchanged) | consumes client streams in `Task`s with `[weak self]`. A task that outlives one call (the connection observer, the shot-counter listener) holds only the stream, never the client, so releasing the machine and the client releases both. |
 | Value types (models, events, `BluetoothTransport`, IDs, token) | `Sendable` | |
 | Locks | `OSAllocatedUnfairLock` (macOS 13+) or `NSLock` | `Mutex` is macOS 15+ and MUST NOT be used |
+
+**Lifetime.** Releasing a `LaMarzoccoBluetoothClient` without calling `disconnect()` MUST NOT leak
+the link or park its consumers: the actor's `deinit` cancels `idleTask`, `linkWatcher` and
+`reconnectTask`, closes a live link fire-and-forget (`Task { await link.disconnect() }`), and
+finishes every listener continuation (`connectionEvents()`, `shotCounterEvents()`, `rawFrames()`),
+so consumers' `for await` loops end. No event is emitted from `deinit`. (Upstream's idle task keeps
+the client alive until it disconnects; the Swift tasks hold the client weakly, so the teardown has
+to be explicit.)
 
 Rules: no CB object crosses an isolation boundary (only `Data`, `String`, UUIDs, enums). There is no
 `Task {}` hop inside a delegate callback (ordering). There is no `Task.immediate` dependency: the
@@ -1417,7 +1430,9 @@ costs nothing without listeners (emission is guarded by `rawFrameListeners.isEmp
 writes (outbound), reads and notifications (inbound, verbatim, notifications before the replay
 check), and synthetic lifecycle markers. The library tap is **verbatim**, per the house rule
 (redaction happens at the display boundary). Frames carrying the token (the auth write, the token
-read) set `isSecret = true` so every consumer can redact without knowing UUIDs.
+read) set `isSecret = true` so every consumer can redact without knowing UUIDs. Today only the auth
+write reaches the tap: `readToken` is static and taps nothing (§4.14). The rule stands for any
+token-read frame a later version emits.
 `rawRead(_ setting:)` returns the verbatim response bytes of one read request.
 
 ### 5.8 How AngstromUI gains Bluetooth
@@ -3166,7 +3181,7 @@ Each one MUST be recorded in `UPSTREAM.md` (§11).
 | D2 | `bleAuthToken` is **not** a `Machine` field. It is read by `LaMarzoccoCloudClient.bluetoothAuthToken(serial:)` and wrapped in the opaque, redacting, non-`Codable` `BluetoothAuthToken`. | A field would land in every persisted `MachineSnapshot` and in CLI-encoded output, and would break `Machine` round-trip equality for fixtures carrying the placeholder. The house rule says tokens are never persisted or logged. |
 | D3 | Peripheral identity is the `CBPeer.identifier` UUID (`BluetoothPeripheralID`), not a MAC. `ble_device_callback` is not ported; the adapter re-resolves by identifier on every connect. Discovery also accepts the advertised local name when `CBPeripheral.name` is nil, and returns first-seen order. | Apple exposes no MAC. bleak on macOS already reports the UUID as `address` (`B-SC:160`). |
 | D4 | `AsyncStream`s instead of callbacks (`connectionEvents`, `shotCounterEvents`, `bluetoothEvents`). A second `startShotCounter` cannot "replace the callbacks". Re-entrant-stop recursion cannot happen. `_safe_call` is unnecessary. | House pattern (`dashboardUpdates()`/`connectionEvents()`). Swift concurrency. |
-| D5 | Coercion differences from mashumaro 3.17 (§3.10; all executed, BT-COERCE/BT-NTF-COERCE): (a) string booleans use `_parse_bool` (`"false"` → false; upstream `bool("false")` is `True`), so `{"BrewingUpdateGroup1Ev":"false",…}` stops a shot instead of continuing it; (b) unknown boiler ids and `machineModes` entries become `.other` instead of failing the read; (c) an array/object in a string field becomes its compact JSON text instead of Python `repr` (`["a"]` vs `"['a']"`): only the text differs, because no logic compares these strings except `status` against `"success"`, which neither form can equal; (d) an int outside `Int` range, or from a non-finite value, is an error (`.decoding` in a read, drop in a notification) where Python's `int` is unbounded; (e) a non-finite double (string `"nan"`/`"inf"`; the bare literals `NaN`/`Infinity` and out-of-range literals such as `1e400`, which `JSONSerialization` rejects outright) drops the notification or fails the read, where upstream emits `nan`/`inf` telemetry, or for a brewing time raises `ValueError` from `derive_state` after merging `nan` into the tracker; (f) numeric strings with `_` digit separators (`"1_0"`) are an error, where Python's `float()`/`int()` accept them, and so are numeric strings written with non-ASCII Unicode digits (`"١"`, full-width `"３.5"`), which Python also accepts (h); (i) a JSON object with a duplicate key keeps the **first** value (`JSONSerialization`), where Python keeps the last; (j) a lone surrogate escape (`"\ud800"`) makes the whole payload unparseable, where Python's `json.loads` accepts it; (k) a list-typed field (`boilers`, `machineModes`) must be a JSON array: an object or a string there is `.decoding`, where upstream iterates whatever it gets (`{}` and `""` become an empty list, a dict yields its keys); (g) a number literal with more significant digits than a double holds, or an integer literal outside the 64-bit range, arrives from `JSONSerialization` as an `NSDecimalNumber` and is handled from its **exact decimal value**: the int rule truncates it exactly (`3.9999999999999999999999` → 3, where Python's `int(float(…))` gives 4; `9223372036854775807.0` → `Int.max`, where Python gives 2⁶³), and the string rule renders any integral one as bare digits (`5.00000000000000000000` → `"5"`, where Python gives `"5.0"`; `100000000000000000000.0` → `"100000000000000000000"`, where Python gives `"1e+20"`), because the parsed number no longer records whether the literal had a fraction. | (a) latent upstream bug; (b) tolerant-parsing convention; (c)–(f) Swift has no unbounded int, no Python `repr`, and `JSONSerialization` has no NaN literals; failing a value is safer than trapping or emitting NaN. None of these inputs has been observed on the wire. |
+| D5 | Coercion differences from mashumaro 3.17 (§3.10; all executed, BT-COERCE/BT-NTF-COERCE): (a) string booleans use `_parse_bool` (`"false"` → false; upstream `bool("false")` is `True`), so `{"BrewingUpdateGroup1Ev":"false",…}` stops a shot instead of continuing it; (b) unknown boiler ids and `machineModes` entries become `.other` instead of failing the read; (c) an array/object in a string field becomes its compact JSON text instead of Python `repr` (`["a"]` vs `"['a']"`): only the text differs, because no logic compares these strings except `status` against `"success"`, which neither form can equal; (d) an int outside `Int` range, or from a non-finite value, is an error (`.decoding` in a read, drop in a notification) where Python's `int` is unbounded; (e) a non-finite double (string `"nan"`/`"inf"`; the bare literals `NaN`/`Infinity` and out-of-range literals such as `1e400`, which `JSONSerialization` rejects outright) drops the notification or fails the read, where upstream emits `nan`/`inf` telemetry, or for a brewing time raises `ValueError` from `derive_state` after merging `nan` into the tracker; (f) numeric strings with `_` digit separators (`"1_0"`) are an error, where Python's `float()`/`int()` accept them; (g) a number literal with more significant digits than a double holds, or an integer literal outside the 64-bit range, arrives from `JSONSerialization` as an `NSDecimalNumber` and is handled from its **exact decimal value**: the int rule truncates it exactly (`3.9999999999999999999999` → 3, where Python's `int(float(…))` gives 4; `9223372036854775807.0` → `Int.max`, where Python gives 2⁶³), and the string rule renders any integral one as bare digits (`5.00000000000000000000` → `"5"`, where Python gives `"5.0"`; `100000000000000000000.0` → `"100000000000000000000"`, where Python gives `"1e+20"`), because the parsed number no longer records whether the literal had a fraction; (h) numeric strings written with non-ASCII Unicode digits (`"١"`, full-width `"３.5"`) are an error, where Python accepts them; (i) a JSON object with a duplicate key keeps the **first** value (`JSONSerialization`), where Python keeps the last; (j) a lone surrogate escape (`"\ud800"`) makes the whole payload unparseable, where Python's `json.loads` accepts it; (k) a list-typed field (`boilers`, `machineModes`) must be a JSON array: an object or a string there is `.decoding`, where upstream iterates whatever it gets (`{}` and `""` become an empty list, a dict yields its keys). | (a) latent upstream bug; (b) tolerant-parsing convention; (c)–(f) Swift has no unbounded int, no Python `repr`, and `JSONSerialization` has no NaN literals; failing a value is safer than trapping or emitting NaN. None of these inputs has been observed on the wire. |
 | D6 | Integral temperatures are encoded without a fraction (`93`), where Python sends `93.0` for a float. | Swift has one numeric type here. Every upstream test vector passes ints, so all pinned bytes match. Firmware tolerance is UNVERIFIED (U7). |
 | D7 | Request robustness: (a) a link drop between a request's write and read fails the request instead of silently reconnecting and reading a stale value. (b) A missing characteristic triggers one real rediscovery on the live link before dropping (upstream's `clear_cache` is a no-op on macOS). (c) `didModifyServices` forces rediscovery. (d) Cancellation inside a request is drop-class. (e) `ensureConnected` trusts the stored `link` (I1): a request that starts after the peripheral dropped but before the actor processed `.disconnected` fails with `.bluetoothConnectionFailed` (drop-class; the device layer falls back to the cloud) instead of reconnecting, which upstream does because it checks bleak's live `is_connected` (`BT:183-186,236`). The next request reconnects. | Correctness on Apple. Upstream's behaviour in (a)–(d) is either a no-op or a misread response. (e) keeps link state single-sourced in the actor; the window is one event hop and the outcome is a clean, retryable failure. |
 | D8 | `Model(bluetoothFamily:)` implements the `e0f0249` aliases (`"GS3"` → GS3 AV, `"LINEA"` → Linea Mini). The cloud parser `Model.match` keeps `"GS3"` → `.gs3`. | Already-documented cloud divergence (`UPSTREAM.md:94-100`). BLE needs upstream's mapping. |

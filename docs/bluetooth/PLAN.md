@@ -2046,7 +2046,7 @@ verify and integrate packages. They are spelled out in full in every manifest br
   swift build --build-tests
   swift test --filter 'BluetoothTokenTests|BluetoothDiagnosticsTests|BluetoothClientCoreTests'
   swift test --package-path cli --filter 'BleOutputTests'
-  bash -c '! grep -rn "Codable" Sources/Angstrom/Bluetooth/BluetoothAuthToken.swift'
+  bash -c '! grep -nE "^[^/]*(Codable|Encodable|Decodable)" Sources/Angstrom/Bluetooth/BluetoothAuthToken.swift'
   ```
 - **Task (brief body):** Trace every flow of BluetoothAuthToken.rawValue and token bytes in Sources/ and cli/Sources/: authFrame, the auth write, readToken, logHandler messages, error messages, description/debugDescription/Mirror, Codable conformances (MachineSnapshot must never contain it), the raw tap (isSecret on the auth write and the token read), and CLI output (Redact.bluetoothFrame, `ble token --show-secret`). Any interpolation of the raw value into a string that is not the auth frame or the explicit --show-secret output is a blocker. Run the token, diagnostics and CLI redaction tests.
 

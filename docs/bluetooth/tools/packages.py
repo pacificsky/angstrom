@@ -1174,7 +1174,7 @@ pkg(id="BT-W4-05", title="Verify: secrecy of the BLE token (library, logs, error
     extraTests=[], tests=[],
     acceptance=[BUILD, filt("BluetoothTokenTests", "BluetoothDiagnosticsTests", "BluetoothClientCoreTests"),
                 cfilt("BleOutputTests"),
-                "bash -c '! grep -rn \"Codable\" Sources/Angstrom/Bluetooth/BluetoothAuthToken.swift'"])
+                "bash -c '! grep -nE \"^[^/]*(Codable|Encodable|Decodable)\" Sources/Angstrom/Bluetooth/BluetoothAuthToken.swift'"])
 
 pkg(id="BT-W4-06", title="Verify: docs accuracy, divergence register and DocC build",
     wave=4, kind="verify", size="S", dependsOn=["BT-W2-07", "BT-W2-08", "BT-W1-08", "BT-W3-06", "BT-W3-07", "BT-W3-08", "BT-W3-09"],
