@@ -128,4 +128,126 @@ final class BleListenTests: XCTestCase {
         XCTAssertNil(ended)
         await stop.waitForTeardown()   // already torn down: returns at once
     }
+
+    // MARK: finish(after:stop:link:) — every ending leaves the link down
+
+    /// Angstrom-only: §10.3 (review fix) — Ctrl-C whose teardown finishes before
+    /// `startShotCounter()` reaches the client: the start then connects and subscribes, and the run
+    /// must still stop the shot counter and disconnect before it exits 0 (it used to return with the
+    /// link up and subscribed).
+    func testSigintTeardownBeforeStartReachesClientStillDisconnects() async throws {
+        let stop = ListenStopSignal()
+        let link = RecordingListenLink()
+        // The SIGINT handler runs to completion first (its calls are no-ops on the idle client).
+        let handlerStarted = await stop.beginTeardown()
+        XCTAssertTrue(handlerStarted)
+        await link.stopShotCounter()
+        await link.disconnect()
+        await stop.finishTeardown()
+        await link.reset()
+
+        // Then startShotCounter() lands and subscribes.
+        let end = await BleListen.finish(after: .subscribed, stop: stop, link: link)
+
+        XCTAssertTrue(Self.isInterrupted(end), "\(end)")
+        let calls = await link.calls
+        XCTAssertEqual(calls, [.stopShotCounter, .disconnect])
+    }
+
+    /// Angstrom-only: §10.3 (review fix) — Ctrl-C while subscribed: the run waits for the SIGINT
+    /// teardown, then repeats it (idempotent) and ends cleanly.
+    func testSigintWhileSubscribedWaitsForTeardownThenDisconnects() async throws {
+        let stop = ListenStopSignal()
+        let link = RecordingListenLink()
+        let run = Task { await BleListen.finish(after: .subscribed, stop: stop, link: link) }
+        await Task.yield()
+
+        let began1 = await stop.beginTeardown()
+        XCTAssertTrue(began1)
+        await stop.finishTeardown()
+
+        let end = await run.value
+        XCTAssertTrue(Self.isInterrupted(end), "\(end)")
+        let calls = await link.calls
+        XCTAssertEqual(calls, [.stopShotCounter, .disconnect])
+    }
+
+    /// Angstrom-only: §10.3 (review fix) — an unsupported result or a start failure that raced a
+    /// Ctrl-C (the start may have connected after the handler ran) still ends with the link down
+    /// and exit 0.
+    func testSigintDuringUnsupportedOrFailedStartStillDisconnects() async throws {
+        let starts: [ListenStart] = [.unsupported, .failed(LaMarzoccoError.bluetoothAuthenticationFailed)]
+        for start in starts {
+            let stop = ListenStopSignal()
+            let link = RecordingListenLink()
+            let began2 = await stop.beginTeardown()
+            XCTAssertTrue(began2)
+            await stop.finishTeardown()
+
+            let end = await BleListen.finish(after: start, stop: stop, link: link)
+
+            XCTAssertTrue(Self.isInterrupted(end), "\(start) → \(end)")
+            let calls = await link.calls
+            XCTAssertEqual(calls, [.stopShotCounter, .disconnect], "\(start)")
+        }
+    }
+
+    /// Angstrom-only: §10.3 — unsupported / a start failure without Ctrl-C: the run claims the
+    /// shutdown and disconnects; a later Ctrl-C or give-up starts nothing.
+    func testUnsupportedOrFailedStartClaimsShutdownAndDisconnects() async throws {
+        let stop = ListenStopSignal()
+        let link = RecordingListenLink()
+        let unsupported = await BleListen.finish(after: .unsupported, stop: stop, link: link)
+        guard case .unsupported = unsupported else { return XCTFail("\(unsupported)") }
+        var calls = await link.calls
+        XCTAssertEqual(calls, [.disconnect])
+        let began3 = await stop.beginTeardown()
+        XCTAssertFalse(began3)
+        await stop.giveUp(CLIError("ignored"))
+
+        let failingStop = ListenStopSignal()
+        let failingLink = RecordingListenLink()
+        let failed = await BleListen.finish(after: .failed(LaMarzoccoError.bluetoothAuthenticationFailed),
+                                            stop: failingStop, link: failingLink)
+        guard case .failed(let error) = failed else { return XCTFail("\(failed)") }
+        XCTAssertEqual(error as? LaMarzoccoError, .bluetoothAuthenticationFailed)
+        calls = await failingLink.calls
+        XCTAssertEqual(calls, [.disconnect])
+        let began4 = await failingStop.beginTeardown()
+        XCTAssertFalse(began4)
+    }
+
+    /// Angstrom-only: §10.3 (amended) — a give-up while subscribed ends the run with the mapped
+    /// error after a disconnect.
+    func testGiveUpWhileSubscribedDisconnects() async throws {
+        let stop = ListenStopSignal()
+        let link = RecordingListenLink()
+        let run = Task { await BleListen.finish(after: .subscribed, stop: stop, link: link) }
+        await Task.yield()
+
+        await stop.giveUp(CLIError("Bluetooth authentication failed."))
+
+        let end = await run.value
+        guard case .gaveUp(let error) = end else { return XCTFail("\(end)") }
+        XCTAssertEqual(error.message, "Bluetooth authentication failed.")
+        let calls = await link.calls
+        XCTAssertEqual(calls, [.disconnect])
+    }
+
+    // MARK: Helpers
+
+    private static func isInterrupted(_ end: ListenEnd) -> Bool {
+        if case .interrupted = end { return true }
+        return false
+    }
+}
+
+/// Records the shutdown calls `BleListen.finish` makes, in order.
+private actor RecordingListenLink: ListenLink {
+    enum Call: Equatable { case stopShotCounter, disconnect }
+    private(set) var calls: [Call] = []
+
+    func stopShotCounter() async { calls.append(.stopShotCounter) }
+    func disconnect() async { calls.append(.disconnect) }
+    func reset() { calls = [] }
 }
