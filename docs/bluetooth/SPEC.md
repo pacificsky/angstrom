@@ -16,7 +16,8 @@
 > (`ble listen` on give-up), §12 D5(h)–(k), D9. From the Wave 2 fix reviews: §4.9 (`.subscribed`
 > only while still enabled), §4.13 (availability read once at loop start), §4.19
 > (`isShotCounterActive` from the client's live state after a start), §10.3 (key order not part of
-> the contract; `char`, `text` and `value` rules).
+> the contract; `char`, `text` and `value` rules). From the Wave 3 reviews: §4.15 (the BLE-only
+> operations and `startShotCounter()` record and clear `lastError`).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -1022,6 +1023,10 @@ sleeper.
 - **BLE-only operations** (`refreshDashboardFromBluetooth`, `refreshModelFromBluetooth`) without a
   BLE client throw `.bluetoothConnectionFailed("Bluetooth client not initialized")` (`MACH:332,353`).
   `startShotCounter()` without a BLE client returns `false` (`MACH:183-184`).
+  All three run inside `capturing`, like every other throwing operation on the machine: a failure
+  (the missing-client error included) is recorded in `lastError` before it is rethrown, and a
+  success (a `false` from `startShotCounter()` included) clears it. Angstrom-only: upstream has no
+  `lastError`. "No mutation" on a failed read (§4.17 step 4) refers to the dashboard and model.
 - **Model gating** uses `model` as today (dashboard ?? settings ?? schedule). If the model is
   unknown, `requireModel` throws `.unsupportedModel`. There is no silent Linea Micra default (D17).
 - If a BLE client is present, `init` starts observing `bluetooth.connectionEvents()` and sets
