@@ -230,7 +230,73 @@ final class BluetoothDeviceStateTests: XCTestCase {
         await waitForBluetoothConnected(harness.machine, false)
     }
 
+    /// Angstrom-only: §5.5 (Lifetime) — the long-lived observation holds only the stream, never the
+    /// client: releasing a machine and its never-connected client releases both, whether the observation
+    /// has already registered and seeded (parked on the stream) or has not run yet.
+    ///
+    /// Does not rely on the client finishing its listener streams in `deinit`: the parked task may stay
+    /// suspended on its orphaned stream, which must not keep either object alive.
+    func testReleasingMachineAndClientReleasesBoth() async throws {
+        // Observation registered and seeded, parked in `for await` on a client with no link.
+        do {
+            let (weakMachine, weakClient, central) = try await makeReleasedMachineAndClient(parked: true)
+            await waitUntilReleased { weakMachine.value == nil && weakClient.value == nil }
+            XCTAssertNil(weakMachine.value, "the machine must deallocate")
+            XCTAssertNil(weakClient.value, "the observation task must not keep the client alive")
+            XCTAssertEqual(central.connectCount, 0, "the client was never connected")
+        }
+        // Released before the observation task first runs.
+        do {
+            let (weakMachine, weakClient, central) = try await makeReleasedMachineAndClient(parked: false)
+            await waitUntilReleased { weakMachine.value == nil && weakClient.value == nil }
+            XCTAssertNil(weakMachine.value, "the machine must deallocate")
+            XCTAssertNil(weakClient.value, "the observation task must not keep the client alive")
+            XCTAssertEqual(central.connectCount, 0, "the client was never connected")
+        }
+    }
+
     // MARK: - Helpers
+
+    /// A weak reference box, so references can be handed out of a scope.
+    private final class Weak<Object: AnyObject> {
+        weak var value: Object?
+        init(_ value: Object) { self.value = value }
+    }
+
+    /// Build a fake-central-backed client and a machine on it, optionally wait until the observation has
+    /// registered and seeded, then drop every strong reference and return weak ones (plus the central).
+    private func makeReleasedMachineAndClient(parked: Bool) async throws
+        -> (Weak<LaMarzoccoMachine>, Weak<LaMarzoccoBluetoothClient>, FakeBluetoothCentral) {
+        let central = FakeBluetoothCentral()   // nothing connects: no link is ever made
+        var client: LaMarzoccoBluetoothClient? = LaMarzoccoBluetoothClient(
+            transport: .fake(central, sleeper: ManualBluetoothSleeper(manual: [.idleDisconnect])),
+            peripheral: .fake, token: BluetoothAuthToken("token"))
+        var machine: LaMarzoccoMachine? = LaMarzoccoMachine(serialNumber: BluetoothMachineHarness.serial,
+                                                            client: nil, bluetooth: client)
+        let weakMachine = Weak(try XCTUnwrap(machine))
+        let weakClient = Weak(try XCTUnwrap(client))
+        XCTAssertNotNil(machine?.bluetoothConnectionTask)
+
+        if parked {
+            // Only the seed can bring the property back to `false` (no client activity): once it has,
+            // the observation is registered, seeded and parked on the stream.
+            let observed = try XCTUnwrap(machine)
+            observed.isBluetoothConnected = true
+            await waitForBluetoothConnected(observed, false)
+        }
+
+        machine = nil
+        client = nil
+        return (weakMachine, weakClient, central)
+    }
+
+    /// Bounded wait without wall-clock sleeps: yield (letting pending tasks and actor jobs run) until
+    /// `released()` holds or the yield budget is spent; the caller asserts afterwards.
+    private func waitUntilReleased(_ released: () -> Bool) async {
+        for _ in 0..<1_000 where !released() {
+            await Task.yield()
+        }
+    }
 
     /// Queue one link whose scripted machine accepts the client's token `"token"`.
     private func enqueueAcceptingLink(_ harness: BluetoothMachineHarness) {
