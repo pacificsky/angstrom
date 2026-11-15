@@ -121,7 +121,7 @@ selection and output live in `BleSession.swift` and `BleOutput.swift`.
 | `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `readToken` | `{"token":"**REDACTED**","length":n}`. The real value only with `--show-secret`. |
 | `ble read <setting\|all> [selection]` | optional | yes | `rawRead` + typed read | per setting: `{"ts","setting","raw","decoded"}` (`raw` = UTF-8 text of the verbatim bytes, or hex if not UTF-8) |
 | `ble cmd power <on\|off>` / `steam <on\|off>` / `temp <coffee\|steam> <celsius>` / `standby --enabled <bool> --minutes <n> --mode <LastBrewing\|PowerOn>` + `--confirm` | optional | yes | client commands | `{"ts","command","status":{id,message,status},"success":bool}` |
-| `ble listen [selection] [--raw\|--decoded]` | optional | yes | `rawFrames`, `connectionEvents`, `shotCounterEvents`, `startShotCounter` | raw frame lines and decoded event lines until SIGINT |
+| `ble listen [selection] [--raw\|--decoded]` | optional | yes | `rawFrames`, `connectionEvents`, `shotCounterEvents`, `startShotCounter` | raw frame lines and decoded event lines until SIGINT (or until the shot counter gives up: error on stderr, non-zero exit) |
 
 `[selection]` is `--peripheral <uuid>`, `--serial <SN>` and `--ble-token <t>`
 (`BleTargetOptions`, shared through `@OptionGroup`).
@@ -162,7 +162,10 @@ subscribe frames are captured. If `startShotCounter()` returns `false` it prints
   `value` uses a CLI-local `Encodable` mirror of `BluetoothShotCounterUpdate` /
   `BluetoothMachineTelemetry`.
 - `ble listen` installs `SignalHandler` (SIGINT) → `stopShotCounter()` +
-  `disconnect()`, then exits 0, mirroring the cloud `listen`.
+  `disconnect()`, then exits 0, mirroring the cloud `listen`. If the shot counter
+  gives up (`ShotCounterEvent.gaveUp(error)`), `ble listen` prints the mapped
+  error to stderr, disconnects and exits non-zero in every output mode, instead
+  of sitting silent until SIGINT.
 - Error texts (stderr):
   - `.bluetoothUnavailable(.unauthorized(_))` →
     `Bluetooth access denied. Grant it to your terminal app in System Settings › Privacy & Security › Bluetooth.`

@@ -82,7 +82,10 @@ not wait for ``LaMarzoccoMachine/isBluetoothConnected``.
 
 Model-gated commands stay gated: until the model is known (from the cloud, or from
 ``LaMarzoccoMachine/refreshModelFromBluetooth()``), they throw
-`LaMarzoccoError.unsupportedModel`. There is no silent default model.
+`LaMarzoccoError.unsupportedModel`. There is no silent default model. A cloud-only
+command on a machine without a cloud client throws
+`LaMarzoccoError.cloudOnlyFunctionality` before any model check, even when it is
+also model-gated.
 
 **Dashboard from Bluetooth.** ``LaMarzoccoMachine/refreshDashboardFromBluetooth()``
 reads the machine mode, plumb-in state, water tank and boilers over Bluetooth and
@@ -100,6 +103,9 @@ authentication errors. While it runs:
   `brewingStartTime` during a shot, about 4 seconds before the cloud would. The
   overlay is cleared when the link is lost or 60 seconds after the last brewing
   update. It is never written into ``LaMarzoccoMachine/snapshot``.
+  ``LaMarzoccoMachine/refreshDashboard()`` (and the reconnect re-fetch) re-apply
+  the overlay over the fresh cloud widget, and `refreshDashboard()` returns the
+  rendered `dashboard`, overlay included.
 - ``LaMarzoccoMachine/bluetoothBrewingUpdate`` holds the latest brewing update,
   ``LaMarzoccoMachine/lastShotTime`` the last finished shot's duration, and
   ``LaMarzoccoMachine/bluetoothTelemetry`` the merged live values (boiler

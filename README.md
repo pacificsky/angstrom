@@ -314,9 +314,15 @@ Either client may be `nil`. The Bluetooth-first commands are `setPower`,
 report auto standby). If the Bluetooth attempt fails
 to connect, authenticate, or finds Bluetooth unavailable, or the machine answers
 with a non-success status, the command goes to the cloud; without a cloud client
-the error is thrown. A Bluetooth timeout is thrown without fallback. Every other
+the error is thrown. A Bluetooth timeout is thrown without fallback.
+
+The Bluetooth-only operations (`refreshDashboardFromBluetooth`,
+`refreshModelFromBluetooth`, `startShotCounter`/`stopShotCounter`) never need the
+cloud. Without a Bluetooth client the two refreshes throw
+`.bluetoothConnectionFailed` and `startShotCounter` returns `false`. Every other
 operation is cloud-only and throws `.cloudOnlyFunctionality` without a cloud
-client.
+client (also on machines where it is model-gated); `stop()` is a no-op without
+a cloud client.
 
 **Upgrading from 1.x:** v2.0.0 adds `LaMarzoccoError` cases
 (`bluetoothConnectionFailed`, `bluetoothAuthenticationFailed`,

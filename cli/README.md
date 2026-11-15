@@ -195,7 +195,7 @@ characteristics, the advertised name format, the shot-counter replay, …).
 | `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `{"token":"**REDACTED**","length":n}` |
 | `ble read <setting\|all> [selection]` | optional | yes | `{"ts","setting","raw","decoded"}` per setting |
 | `ble cmd <power\|steam\|temp\|standby> … --confirm [selection]` | optional | yes | `{"ts","command","status":{id,message,status},"success":bool}` |
-| `ble listen [selection] [--raw\|--decoded]` | optional | yes | raw frame lines and decoded event lines until Ctrl-C |
+| `ble listen [selection] [--raw\|--decoded]` | optional | yes | raw frame lines and decoded event lines until Ctrl-C (or until the shot counter gives up: error on stderr, non-zero exit) |
 
 `[selection]` is `--peripheral <uuid>`, `--serial <SN>` and `--ble-token <t>`,
 described next.
@@ -270,7 +270,9 @@ swift run angcli ble scan --all --duration 10
 
 Connect (no authentication) and print the full GATT table: one line per
 characteristic with its service and properties. Use it to see which service
-hosts the La Marzocco characteristics (`0a0b7847-…` to `0e0b7847-…`).
+hosts the La Marzocco characteristics (`0a0b7847-…` to `0e0b7847-…`). Every
+UUID is printed in lowercase, full 128-bit form; a short SIG UUID is expanded
+(`180a` prints as `0000180a-0000-1000-8000-00805f9b34fb`).
 
 ```bash
 swift run angcli ble gatt --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20
@@ -327,7 +329,10 @@ stops the shot counter, disconnects and exits 0). The streams are registered
 before the shot counter starts, so the authentication and subscribe frames are
 captured too. `--raw` prints only raw frames, `--decoded` only decoded events;
 both are shown by default. If the machine has no shot counter, angcli prints
-`Shot counter not supported by this machine` to stderr and exits non-zero.
+`Shot counter not supported by this machine` to stderr and exits non-zero. If
+the shot counter gives up (3 rejected logins while reconnecting, or the
+shot-counter characteristic disappearing), angcli prints the error to stderr, disconnects and exits
+non-zero, in every output mode.
 
 ```bash
 swift run angcli ble listen --serial MR013437
@@ -417,7 +422,7 @@ swift run angcli listen --raw \
 | | |
 |---|---|
 | `LAMARZOCCO_USERNAME` / `LAMARZOCCO_PASSWORD` | Credentials (else prompted). Never persisted. |
-| `LAMARZOCCO_BLE_TOKEN` | Bluetooth token for `ble` (else `--ble-token`, else the cloud). Never persisted. |
+| `LAMARZOCCO_BLE_TOKEN` | Bluetooth token for `ble`, used when `--ble-token` is not given (else the cloud). Never persisted. |
 | `~/.config/angstrom/installation.json` | Per-install key + `isRegistered`, mode `0600`. Honors `XDG_CONFIG_HOME`. |
 
 The installation key embeds a P-256 private-key scalar — **treat the file as a

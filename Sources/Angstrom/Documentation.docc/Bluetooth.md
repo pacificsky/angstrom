@@ -291,6 +291,10 @@ Either client may be `nil`. With a Bluetooth client, `setPower(on:)`,
 `setSteamTargetTemperature(celsius:)` and `setSmartStandby(enabled:minutes:after:)`
 try Bluetooth first and fall back to the cloud (on machines that report auto
 standby, `setSmartStandby` is cloud-only). `refreshDashboardFromBluetooth()` and
-`startShotCounter()` keep `dashboard` current without the cloud. Every other
-operation is cloud-only and throws ``LaMarzoccoError/cloudOnlyFunctionality``
-without a cloud client.
+`startShotCounter()` keep `dashboard` current without the cloud. These
+Bluetooth-only operations (with `refreshModelFromBluetooth()` and
+`stopShotCounter()`) never need a cloud client; without a Bluetooth client the
+two refreshes throw ``LaMarzoccoError/bluetoothConnectionFailed(_:)`` and
+`startShotCounter()` returns `false`. Every other operation is cloud-only and
+throws ``LaMarzoccoError/cloudOnlyFunctionality`` without a cloud client, even
+where it is also model-gated. `stop()` is a no-op without a cloud client.
