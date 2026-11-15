@@ -113,7 +113,8 @@ final class MachineTransportRoutingTests: XCTestCase {
         await assertCloudOnly(swan, "setGrinderAutoStandby") { try await swan.setGrinderAutoStandby(minutes: 15) }
     }
 
-    /// Upstream parity: `@cloud_only` is the outermost decorator on every gated cloud command
+    /// Angstrom-only: §4.15 — cloud resolution precedes model gating and argument guards.
+    /// Upstream's `@cloud_only` is the outermost decorator on every gated cloud command
     /// (`MACH:511-512,922-923`, `_grinder.py:59-60`), so it fires before `@models_supported` and the
     /// argument checks. SPEC §4.15 (amended): cloud resolution precedes gating. A cloud-less machine
     /// therefore gets `.cloudOnlyFunctionality` (recorded in `lastError`, nothing written) from every

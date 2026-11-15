@@ -69,7 +69,9 @@ The prompt, handed verbatim with `{…}` filled in:
 `verdict` is FAIL if and only if there is at least one `blocker` or `major` finding.
 Intentional divergences D1–D22 (SPEC §12) are not findings, unless the code implements them
 differently from the SPEC. A reviewer that cannot settle a point from `$UPSTREAM` and the SPEC
-reports it as `minor`, with `"summary": "UNVERIFIED: …"`.
+reports it as `minor`, with `"summary": "UNVERIFIED: …"`. In `cli/`, an `internal` declaration in an
+owned file that exists so `@testable` tests can reach a decision (for example the mapping from an
+event to an exit) is not a finding, even where a brief says "tests are parsing only".
 
 ### 5.3 Fix loop
 

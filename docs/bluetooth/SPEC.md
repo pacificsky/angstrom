@@ -13,7 +13,9 @@
 > helpers), §10.6 (stub text), §12 D5(g). From the Wave 2 verify packages: §3.4, §4.1, §4.2, §5.5
 > (wording), §3.6 (BOM rejected), §4.15 (cloud resolution precedes gating), §4.19 (`refreshDashboard()`
 > returns the rendered dashboard), §5.4 (retention pruning), §6.2 (128-bit UUID strings), §10.3
-> (`ble listen` on give-up), §12 D5(h)–(k), D9.
+> (`ble listen` on give-up), §12 D5(h)–(k), D9. From the Wave 2 fix reviews: §4.9 (`.subscribed`
+> only while still enabled), §4.13 (availability read once at loop start), §4.19
+> (`isShotCounterActive` from the client's live state after a start).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -807,7 +809,11 @@ The next request reconnects lazily (`BT:663,680`; `TBC:1382-1402`).
        `refresh = true` ("the cached service table may be stale", `BT:418-427`; `TBC:652-696`).
    - `tracker = BrewingTracker()`. `replayPending = true` (**before** subscribing). `try await link.subscribe(shotCounter, timeout: timing.operationTimeout)`
      (errors are mapped with the `.request` phase). `shotCounterSubscribed = true`. Emit raw `[subscribed]`.
-3. After releasing the gate: emit `ShotCounterEvent.subscribed`. Return `true`.
+3. After releasing the gate: if `shotCounterEnabled` is still true, emit
+   `ShotCounterEvent.subscribed`. Return `true` either way. A stop that lands while the subscribe is
+   in flight reports nothing: upstream's `_disable_shot_counter` has already cleared the connection
+   callback (`BT:385-388`), and the stop that follows unsubscribes without an `.unsubscribed`, so a
+   `.subscribed` here would never be paired.
 
 Loop exhausted → `false`.
 
@@ -936,6 +942,9 @@ authFailures = 0
 lastError: LaMarzoccoError? = nil
 updates = central.availabilityUpdates()       // created ONCE, here, before the first sleep: a stream only
                                               // sees later changes, so creating it per sleep would race (D14)
+if await central.availability() != .poweredOn:  // read ONCE, after creating the stream (the §4.2 step 3
+    count it as a non-poweredOn value seen      // pattern): a power-off that caused this link loss was
+                                              // yielded before the stream existed (D14)
 while shotCounterEnabled:
     sleep(delay, purpose: .reconnectBackoff)  // BEFORE every attempt, including the first (G-SC-7)
         — ends early if central.availabilityUpdates() yields .poweredOn after a non-poweredOn
@@ -1177,7 +1186,9 @@ shot counter keeps running, and the next brewing update re-applies it.
 listener task is running, subscribe to `bluetooth.shotCounterEvents()` **before** starting, and
 consume it in a MainActor task calling `handleShotCounterEvent`. Then
 `let ok = try await bluetooth.startShotCounter()`. If it throws or returns `false`, cancel the
-listener task and rethrow or return `false`. On `true`, set `isShotCounterActive = true`. Not gated
+listener task and rethrow or return `false`. On `true`, set
+`isShotCounterActive = await bluetooth.shotCounterActive` (the client's live state, which is what
+upstream's property reads, `MACH:150-156`; a stop that raced this start leaves it `false`). Not gated
 on `shotCounterSupported` or on the model (`TM:745-762`).
 
 **`stopShotCounter() async`** (`MACH:193-207`): cancel the listener task **first**, so the client's

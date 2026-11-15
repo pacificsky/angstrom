@@ -24,7 +24,7 @@ extension BluetoothAuthorization {
     /// `CBManager.authorization` (class property; allocates no manager, so it never prompts).
     ///
     /// Use it to gate Bluetooth UI before the first Bluetooth operation. An authorization value
-    /// unknown to this version of the library reads as ``denied``.
+    /// unknown to this version of the library reads as ``BluetoothAuthorization/denied``.
     public static var current: BluetoothAuthorization {
         switch CBManager.authorization {
         case .notDetermined: .notDetermined
