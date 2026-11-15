@@ -72,7 +72,9 @@ package enum BluetoothWireCoercion {
             guard d.isFinite else { throw Failure(detail: "\(key) is not finite") }
             return d
         case .string(let s):
-            guard let d = Double(s.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            // Swift's Double(String) accepts hex floats ("0x1p3"); Python's float() does not.
+            guard !s.contains(where: { $0 == "x" || $0 == "X" }),
+                  let d = Double(s.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                 throw Failure(detail: "\(key) is not a number: \(s)")
             }
             guard d.isFinite else { throw Failure(detail: "\(key) is not finite: \(s)") }
@@ -101,14 +103,22 @@ package enum BluetoothWireCoercion {
         case .bool(let b):
             return b ? 1 : 0
         case .number(let n):
+            // Exact path first: every integer literal in Int range, including Int.max and Int.min
+            // (whose Double images round to ±2^63 and would fail the range check below).
+            if !CFNumberIsFloatType(n as CFNumber), let exact = Int(n.stringValue) {
+                return exact
+            }
+            // A literal outside the 64-bit integer range (or with more digits than a double holds)
+            // arrives as an NSDecimalNumber. Decide with its Decimal value: its doubleValue would
+            // round -9223372036854775809 to -2^63, which then passes the range check as Int.min.
+            if let decimal = n as? NSDecimalNumber {
+                return try truncatedInt(decimal, key: key)
+            }
             let d = n.doubleValue
             let t = d.rounded(.towardZero)
             // Never call Int(_: Double) outside this range: it traps.
             guard d.isFinite, -9223372036854775808.0 <= t, t < 9223372036854775808.0 else {
                 throw Failure(detail: "\(key) is out of range: \(n)")
-            }
-            if !CFNumberIsFloatType(n as CFNumber), let exact = Int(n.stringValue) {
-                return exact   // exact above 2^53
             }
             return Int(t)
         case .string(let s):
@@ -132,6 +142,11 @@ package enum BluetoothWireCoercion {
         case .bool(let b):
             return b ? "True" : "False"
         case .number(let n):
+            // An integer literal too large for UInt64 arrives as a non-fractional NSDecimalNumber:
+            // Python's str(int) gives its digits, never float text.
+            if let decimal = n as? NSDecimalNumber, isIntegral(decimal) {
+                return decimal.stringValue
+            }
             if CFNumberIsFloatType(n as CFNumber) {
                 return String(describing: n.doubleValue)
             }
@@ -184,6 +199,30 @@ package enum BluetoothWireCoercion {
         if let a = value as? NSArray { return .array(a) }
         if let o = value as? NSDictionary { return .object(o) }
         return .unsupported
+    }
+
+    /// True when `decimal` is a finite value with no fractional part.
+    private static func isIntegral(_ decimal: NSDecimalNumber) -> Bool {
+        var value = decimal.decimalValue
+        guard !value.isNaN else { return false }
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &value, 0, .down)
+        return rounded == value
+    }
+
+    /// int() of an `NSDecimalNumber` (§3.10 int rule): truncate toward zero at scale 0, error unless
+    /// the result lies in `Decimal(Int.min)...Decimal(Int.max)`, else convert exactly. Never uses
+    /// `doubleValue`.
+    private static func truncatedInt(_ decimal: NSDecimalNumber, key: String) throws -> Int {
+        var value = decimal.decimalValue
+        guard !value.isNaN else { throw Failure(detail: "\(key) is not finite: \(decimal)") }
+        var truncated = Decimal()
+        NSDecimalRound(&truncated, &value, 0, value >= 0 ? .down : .up)
+        guard Decimal(Int.min) <= truncated, truncated <= Decimal(Int.max),
+              let exact = Int("\(truncated)") else {
+            throw Failure(detail: "\(key) is out of range: \(decimal)")
+        }
+        return exact
     }
 
     /// `[.sortedKeys, .withoutEscapingSlashes]` compact JSON text of an array/object (D5c).
