@@ -191,14 +191,16 @@ characteristics, the advertised name format, the shot-counter replay, …).
 | Subcommand | Needs cloud? | Needs token? | Output (stdout, one JSON object per line) |
 |---|---|---|---|
 | `ble scan [--duration <s>] [--all]` | no | no | `{"id","name","rssi"}` per peripheral |
-| `ble gatt --peripheral <uuid>` | no | no | `{"service","characteristic","properties":[…]}` per characteristic |
-| `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `{"token":"**REDACTED**","length":n}` |
-| `ble read <setting\|all> [selection]` | optional | yes | `{"ts","setting","raw","decoded"}` per setting |
-| `ble cmd <power\|steam\|temp\|standby> … --confirm [selection]` | optional | yes | `{"ts","command","status":{id,message,status},"success":bool}` |
+| `ble gatt --peripheral <uuid>` | no | no | `{"characteristic","properties":[…],"service"}` per characteristic |
+| `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `{"length":n,"token":"**REDACTED**"}` |
+| `ble read <setting\|all> [selection]` | optional | yes | `{"decoded","raw","setting","ts"}` per setting |
+| `ble cmd <power\|steam\|temp\|standby> … --confirm [selection]` | optional | yes | `{"command","status":{"id","message","status"},"success":bool,"ts"}` |
 | `ble listen [selection] [--raw\|--decoded]` | optional | yes | raw frame lines and decoded event lines until Ctrl-C (or until the shot counter gives up: error on stderr, non-zero exit) |
 
 `[selection]` is `--peripheral <uuid>`, `--serial <SN>` and `--ble-token <t>`,
-described next.
+described next. Every `ble` line is compact JSON with its keys in **sorted**
+order (as listed above), so the same input always prints the same text; see
+[Bluetooth output format](#bluetooth-output-format).
 
 #### Selecting the machine and the token
 
@@ -278,16 +280,23 @@ UUID is printed in lowercase, full 128-bit form; a short SIG UUID is expanded
 swift run angcli ble gatt --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20
 ```
 
+Each line has the shape (property names elided here):
+
+```
+{"characteristic":"0a0b7847-e12b-09a8-b04b-8e0922a9abab","properties":[…],"service":"<service uuid>"}
+```
+
 #### `ble token`
 
 Read the Bluetooth token from a machine **in pairing mode** (see its manual). By
 default the token is masked and only its length is printed:
 
-```json
-{"token":"**REDACTED**","length":n}
+```
+{"length":n,"token":"**REDACTED**"}
 ```
 
-`--show-secret` prints the real token, to stdout only. If the machine refuses
+`n` is the token's length in Unicode scalars. `--show-secret` prints the real
+token in `token`, to stdout only. If the machine refuses
 the read (expected outside pairing mode), the error carries an "Is the machine in
 pairing mode?" hint.
 
@@ -296,11 +305,16 @@ pairing mode?" hint.
 Read one setting, or all six, over an authenticated link. Settings:
 `machineCapabilities`, `machineMode`, `tankStatus`, `boilers`, `smartStandBy`,
 `isPlumbedIn`. Each line carries the verbatim reply (`raw`: its UTF-8 text, or
-hex when it isn't UTF-8) next to Angstrom's decoded value (`decoded`).
+hex when it isn't UTF-8) next to Angstrom's decoded value (`decoded`, `null`
+when there is no typed value).
 
 ```bash
 swift run angcli ble read machineMode --serial MR013437
 swift run angcli ble read all --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20 | jq .
+```
+
+```json
+{"decoded":"BrewingMode","raw":"\"BrewingMode\"","setting":"machineMode","ts":"2026-11-14T09:12:03.640Z"}
 ```
 
 #### `ble cmd` (actuates hardware)
@@ -344,19 +358,32 @@ its last one, and Angstrom drops it (the raw view still shows it).
 
 #### Bluetooth output format
 
-Raw lines reuse the `{ts, dir, …}` shape of `listen`, with `>>` for writes and
-`<<` for reads, notifications and lifecycle events:
+Every `ble` line is compact JSON with **sorted keys** (and unescaped slashes).
+Raw lines carry the `ts` and `dir` of the cloud `listen`, with `>>` for writes
+and `<<` for reads, notifications and lifecycle events, as
+`{"char","dir","hex","kind","text","ts"}`:
 
 ```json
-{"ts":"2026-11-14T09:12:03.101Z","dir":">>","kind":"write","char":"0d0b7847-e12b-09a8-b04b-8e0922a9abab","hex":"**REDACTED**","text":"**REDACTED**"}
-{"ts":"2026-11-14T09:12:03.512Z","dir":">>","kind":"write","char":"0a0b7847-e12b-09a8-b04b-8e0922a9abab","hex":"6d616368696e654d6f646500","text":"machineMode\u0000"}
+{"char":null,"dir":"<<","hex":"5b636f6e6e656374696e675d","kind":"event","text":"[connecting]","ts":"2026-11-14T09:12:02.870Z"}
+{"char":"0d0b7847-e12b-09a8-b04b-8e0922a9abab","dir":">>","hex":"**REDACTED**","kind":"write","text":"**REDACTED**","ts":"2026-11-14T09:12:03.101Z"}
+{"char":"0a0b7847-e12b-09a8-b04b-8e0922a9abab","dir":">>","hex":"6d616368696e654d6f646500","kind":"write","text":"machineMode\u0000","ts":"2026-11-14T09:12:03.512Z"}
 ```
 
-`kind` is `write`, `read`, `notification` or `event`; `text` is present when the
-bytes are valid UTF-8, and for `event` it's the marker (`[connecting]`,
-`[authenticated]`, `[subscribed]`, `[replay dropped]`, …). Decoded lines are
-`{"ts","event","value"}` with `event` one of `connected`, `disconnected`,
-`subscribed`, `unsubscribed`, `brewing`, `telemetry`, `gaveUp`.
+`kind` is `write`, `read`, `notification` or `event`. `char` is the lowercase
+characteristic UUID, and always `null` on an `event` line. `text` is present
+when the bytes are valid UTF-8 (the key is left out otherwise), and for `event`
+it's the marker (`[connecting]`, `[connected]`, `[authenticated]`,
+`[subscribed]`, `[replay dropped]`, `[mtu <n>]`, …).
+
+Decoded lines are `{"event","ts","value"}` with `event` one of `connected`,
+`disconnected`, `subscribed`, `unsubscribed`, `brewing`, `telemetry`, `gaveUp`.
+`value` is `{}` for the events that carry no data and `{"error":"…"}` for
+`gaveUp`:
+
+```json
+{"event":"connected","ts":"2026-11-14T09:12:03.230Z","value":{}}
+{"event":"telemetry","ts":"2026-11-14T09:12:05.004Z","value":{"coffeeBoilerTemperature":93.5,"machineMode":"BrewingMode","steamBoilerTemperature":124}}
+```
 
 #### Redaction
 
@@ -384,11 +411,14 @@ tagged with an ISO-8601 `ts` and a `dir`:
   and anything else the server sends.
 
 `--raw` lines carry the verbatim frame text under `raw`; `--decoded` lines carry
-Angstrom's parsed push under `decoded`:
+Angstrom's parsed push under `decoded`. These lines use Foundation's default
+JSON encoding: key order is **not** fixed (it can differ between lines and
+runs; select fields with `jq` rather than matching text), and `/` is escaped as
+`\/`:
 
 ```json
-{"ts":"2026-06-29T00:47:50.327Z","dir":">>","raw":"SUBSCRIBE\ndestination:/ws/sn/MR013437/dashboard\nack:auto\nid:21A2…\ncontent-length:0\n\n\u0000"}
-{"ts":"2026-06-29T00:47:51.612Z","dir":"<<","decoded":{"connected":true,"widgets":[ … ],"removedWidgets":[ … ],"commands":[]}}
+{"dir":">>","raw":"SUBSCRIBE\ndestination:\/ws\/sn\/MR013437\/dashboard\nack:auto\nid:21A2…\ncontent-length:0\n\n\u0000","ts":"2026-06-29T00:47:50.327Z"}
+{"dir":"<<","decoded":{"removedWidgets":[ … ],"connected":true,"widgets":[ … ],"commands":[]},"ts":"2026-06-29T00:47:51.612Z"}
 ```
 
 Status, connection lifecycle, and errors go to **stderr**, so stdout stays a

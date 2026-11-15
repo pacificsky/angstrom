@@ -117,10 +117,10 @@ selection and output live in `BleSession.swift` and `BleOutput.swift`.
 | Subcommand | Needs cloud? | Needs token? | Library surface | Output (stdout, one JSON object per line) |
 |---|---|---|---|---|
 | `ble scan [--duration <s>=5] [--all]` | no | no | `discoverMachines`; with `--all`, `scanAll` (unfiltered) and the count to stderr | `{"id","name","rssi"}` per peripheral (`name` may be null with `--all`) |
-| `ble gatt --peripheral <uuid>` | no | no | `gattTable` | `{"service","characteristic","properties":[…]}` per characteristic |
-| `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `readToken` | `{"token":"**REDACTED**","length":n}`. The real value only with `--show-secret`. |
-| `ble read <setting\|all> [selection]` | optional | yes | `rawRead` + typed read | per setting: `{"ts","setting","raw","decoded"}` (`raw` = UTF-8 text of the verbatim bytes, or hex if not UTF-8) |
-| `ble cmd power <on\|off>` / `steam <on\|off>` / `temp <coffee\|steam> <celsius>` / `standby --enabled <bool> --minutes <n> --mode <LastBrewing\|PowerOn>` + `--confirm` | optional | yes | client commands | `{"ts","command","status":{id,message,status},"success":bool}` |
+| `ble gatt --peripheral <uuid>` | no | no | `gattTable` | `{"characteristic","properties":[…],"service"}` per characteristic |
+| `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `readToken` | `{"length":n,"token":"**REDACTED**"}`. The real value only with `--show-secret`. |
+| `ble read <setting\|all> [selection]` | optional | yes | `rawRead` + typed read | per setting: `{"decoded","raw","setting","ts"}` (`raw` = UTF-8 text of the verbatim bytes, or hex if not UTF-8; `decoded` is null when there is no typed value) |
+| `ble cmd power <on\|off>` / `steam <on\|off>` / `temp <coffee\|steam> <celsius>` / `standby --enabled <bool> --minutes <n> --mode <LastBrewing\|PowerOn>` + `--confirm` | optional | yes | client commands | `{"command","status":{"id","message","status"},"success":bool,"ts"}` |
 | `ble listen [selection] [--raw\|--decoded]` | optional | yes | `rawFrames`, `connectionEvents`, `shotCounterEvents`, `startShotCounter` | raw frame lines and decoded event lines until SIGINT (or until the shot counter gives up: error on stderr, non-zero exit) |
 
 `[selection]` is `--peripheral <uuid>`, `--serial <SN>` and `--ble-token <t>`
@@ -151,16 +151,23 @@ subscribe frames are captured. If `startShotCounter()` returns `false` it prints
 
 ### Output
 
-- Reuse `Stdout`/`Stderr` and the `{ts, dir, …}` line shape of the cloud
-  `listen` (`FramePrinter`), with `>>` (outbound) / `<<` (inbound). A raw BLE line
-  is `{"ts","dir":">>"|"<<","kind":"write|read|notification|event","char":"0b0b…","hex":"…","text":"…"}`.
-  `text` is present when the bytes are valid UTF-8. For `event`, `text` is the
-  marker (`[connecting]`, `[connected]`, `[authenticated]`, `[disconnected]`,
-  `[subscribed]`, `[unsubscribed]`, `[replay dropped]`, `[services invalidated]`,
-  `[mtu <n>]`).
-- A decoded line is `{"ts","event":"connected|disconnected|subscribed|unsubscribed|brewing|telemetry|gaveUp","value":{…}}`.
-  `value` uses a CLI-local `Encodable` mirror of `BluetoothShotCounterUpdate` /
-  `BluetoothMachineTelemetry`.
+- Every `ble` line is compact JSON encoded by `BleOutput` with
+  `[.sortedKeys, .withoutEscapingSlashes]`, so its text is deterministic; the
+  shapes in this section list keys in that sorted order.
+- Reuse `Stdout`/`Stderr` and the `ts`/`dir` fields of the cloud `listen`
+  (`FramePrinter`), with `>>` (outbound) / `<<` (inbound; lifecycle events are
+  inbound). A raw BLE line is
+  `{"char":"0b0b…"|null,"dir":">>"|"<<","hex":"…","kind":"write|read|notification|event","text":"…","ts"}`.
+  `char` is always present: the lowercase characteristic UUID, or `null` for
+  `event`. `text` is present when the bytes are valid UTF-8 (the key is omitted
+  otherwise). For `event`, `text` is the marker (`[connecting]`, `[connected]`,
+  `[authenticated]`, `[disconnected]`, `[subscribed]`, `[unsubscribed]`,
+  `[replay dropped]`, `[services invalidated]`, `[mtu <n>]`).
+- A decoded line is `{"event":"connected|disconnected|subscribed|unsubscribed|brewing|telemetry|gaveUp","ts","value":{…}}`.
+  `value` is `{}` for `connected`/`disconnected`/`subscribed`/`unsubscribed`,
+  `{"error":"…"}` for `gaveUp`, and otherwise uses a CLI-local `Encodable`
+  mirror of `BluetoothShotCounterUpdate` / `BluetoothMachineTelemetry` (nil
+  fields omitted).
 - `ble listen` installs `SignalHandler` (SIGINT) → `stopShotCounter()` +
   `disconnect()`, then exits 0, mirroring the cloud `listen`. If the shot counter
   gives up (`ShotCounterEvent.gaveUp(error)`), `ble listen` prints the mapped
