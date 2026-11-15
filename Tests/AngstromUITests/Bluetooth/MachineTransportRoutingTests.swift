@@ -113,6 +113,113 @@ final class MachineTransportRoutingTests: XCTestCase {
         await assertCloudOnly(swan, "setGrinderAutoStandby") { try await swan.setGrinderAutoStandby(minutes: 15) }
     }
 
+    /// Upstream parity: `@cloud_only` is the outermost decorator on every gated cloud command
+    /// (`MACH:511-512,922-923`, `_grinder.py:59-60`), so it fires before `@models_supported` and the
+    /// argument checks. SPEC §4.15 (amended): cloud resolution precedes gating. A cloud-less machine
+    /// therefore gets `.cloudOnlyFunctionality` (recorded in `lastError`, nothing written) from every
+    /// cloud-only gated method, whatever its model and arguments:
+    ///
+    /// - model gate: a non-matching model (Linea Micra, in none of the sets) and an unknown (nil) model;
+    /// - argument guard alone: a matching model whose argument (`setMirrorGroup1` group 1) or cached
+    ///   widget (Strada X `CMGroupDoses`: `ManualType` only, no pressure) would reject the call;
+    /// - both: a non-matching or nil model together with a rejecting argument.
+    ///
+    /// The BLE-first gated commands are untouched (§4.16: gating runs first), so on the same cloud-less,
+    /// Bluetooth-less machines they still throw `.unsupportedModel`.
+    func testGatedCloudOnlyResolvesCloudBeforeGating() async throws {
+        let micra = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, cloud: false, bluetooth: false).machine
+        let unknown = BluetoothMachineHarness(seed: .none, cloud: false, bluetooth: false).machine
+        XCTAssertEqual(micra.model, .lineaMicra)
+        XCTAssertNil(unknown.model)
+
+        // Model gate (and model gate + argument guard): every cloud-only gated method.
+        for (machine, label) in [(micra, "Linea Micra"), (unknown, "nil model")] {
+            func check<T>(_ name: String, _ operation: () async throws -> T) async {
+                await assertCloudOnly(machine, "\(name) [\(label)]", operation)
+            }
+            await check("setBrewByWeightMode") { try await machine.setBrewByWeightMode(.dose1) }
+            await check("setBrewByWeightDoses") { try await machine.setBrewByWeightDoses(dose1: 30, dose2: 40) }
+            await check("setMode") { try await machine.setMode(.eco) }
+            await check("setAutoFlush") { try await machine.setAutoFlush(on: true) }
+            await check("setSteamFlush") { try await machine.setSteamFlush(on: true) }
+            await check("setRinseFlush") { try await machine.setRinseFlush(on: true) }
+            await check("setRinseFlushTime") { try await machine.setRinseFlushTime(seconds: 3) }
+            await check("setHotWaterDoseEnabled") { try await machine.setHotWaterDoseEnabled(on: true) }
+            await check("setHotWaterDose") { try await machine.setHotWaterDose(dose: 8, doseIndex: .doseA) }
+            await check("setGroupMode") { try await machine.setGroupMode(.brewing) }
+            await check("setCoffeeBoilerEnabled") { try await machine.setCoffeeBoilerEnabled(on: false) }
+            await check("setGroupDoseMode") { try await machine.setGroupDoseMode(.mass) }
+            await check("setGroupDose") { try await machine.setGroupDose(mode: .mass, doseIndex: .doseA, dose: 20) }
+            await check("setBrewingPressure") { try await machine.setBrewingPressure(pressure: 9) }
+            await check("setContinuousDoseEnabled") { try await machine.setContinuousDoseEnabled(on: true) }
+            await check("setContinuousDose") { try await machine.setContinuousDose(seconds: 25) }
+            await check("setMirrorGroup1") { try await machine.setMirrorGroup1(on: true, groupIndex: 2) }
+            // Model gate + a rejecting argument.
+            await check("setMirrorGroup1 (group 1)") { try await machine.setMirrorGroup1(on: true, groupIndex: 1) }
+            await check("setGrinderGrindWith") { try await machine.setGrinderGrindWith(.portafilter) }
+            await check("setGrinderMoreDose") { try await machine.setGrinderMoreDose(revolutions: 2) }
+            await check("setGrinderSpeed") { try await machine.setGrinderSpeed(doseIndex: .doseA, level: .high) }
+            await check("setGrinderAutoSpeed") { try await machine.setGrinderAutoSpeed(doseIndex: .doseA, enabled: true) }
+            await check("setGrinderAutoSpeedReference") {
+                try await machine.setGrinderAutoSpeedReference(doseMode: .mass, extractionSeconds: 28, doseMass: 36)
+            }
+            // `set_dose` is `@cloud_only` too; its speed leg goes through the gated `setGrinderSpeed`.
+            await check("setGrinderDose (speed level)") {
+                try await machine.setGrinderDose(doseIndex: .doseA, dose: 12, speedLevel: .high)
+            }
+
+            // BLE-first gated commands: gating still runs first (§4.16), even with no transport at all.
+            await assertUnsupported(machine, "steam temperature is only supported on GS3, GS3 AV, GS3 MP, Strada X",
+                                    label) {
+                try await machine.setSteamTargetTemperature(celsius: 128)
+            }
+        }
+        await assertUnsupported(unknown, "steam level is only supported on Linea Micra, Linea Mini R", "nil model") {
+            try await unknown.setSteamTargetLevel(.level2)
+        }
+        // The Micra passes the steam-level gate; with no transport at all it then fails on the transport.
+        await assertCloudOnly(micra, "setSteamTargetLevel [Linea Micra]") { try await micra.setSteamTargetLevel(.level2) }
+
+        // Argument guards alone, on a matching model. With a cloud client each of these is rejected with
+        // `.operationNotAvailable` (pinned by testSnapshotPersistsBaseDashboard / LaMarzoccoMachineTests);
+        // without one, `.cloudOnlyFunctionality` comes first.
+        let stradaXBase = try decodeDashboard("dashboard_stradax")
+        let stradaX = BluetoothMachineHarness(seed: .custom(stradaXBase), cloud: false, bluetooth: false).machine
+        XCTAssertEqual(stradaX.model, .stradaX)
+        XCTAssertEqual(stradaX.baseDashboard?.groupDoses?.availableModes, [.manual])
+        XCTAssertEqual(stradaX.baseDashboard?.groupDoses?.brewingPressureSupported, false)
+        await assertCloudOnly(stradaX, "setMirrorGroup1 (group 1) [Strada X]") {
+            try await stradaX.setMirrorGroup1(on: true, groupIndex: 1)
+        }
+        await assertCloudOnly(stradaX, "setGroupDoseMode (unavailable mode) [Strada X]") {
+            try await stradaX.setGroupDoseMode(.mass)
+        }
+        await assertCloudOnly(stradaX, "setGroupDose (no doses for mode) [Strada X]") {
+            try await stradaX.setGroupDose(mode: .manual, doseIndex: .doseA, dose: 20)
+        }
+        await assertCloudOnly(stradaX, "setBrewingPressure (unsupported) [Strada X]") {
+            try await stradaX.setBrewingPressure(pressure: 9)
+        }
+        XCTAssertEqual(stradaX.baseDashboard, stradaXBase)
+
+        // With a cloud client, the same calls still fail on the gate / guard, not on the client.
+        let gatedHarness = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, bluetooth: false)
+        await assertUnsupported(gatedHarness.machine, "machine mode is only supported on Strada X", "cloud") {
+            try await gatedHarness.machine.setMode(.eco)
+        }
+        let guardedHarness = BluetoothMachineHarness(model: .stradaX, seed: .standard, bluetooth: false)
+        do {
+            _ = try await guardedHarness.machine.setMirrorGroup1(on: true, groupIndex: 1)
+            XCTFail("setMirrorGroup1(group 1) with a cloud client must be rejected by the argument guard")
+        } catch {
+            XCTAssertEqual(error as? LaMarzoccoError, .operationNotAvailable("groupIndex must be 2 or 3"))
+        }
+        XCTAssertEqual(guardedHarness.machine.lastError as? LaMarzoccoError,
+                       .operationNotAvailable("groupIndex must be 2 or 3"))
+        XCTAssertEqual(gatedHarness.backend?.recordedPaths.filter { $0.contains("/command/") }.count, 0)
+        XCTAssertEqual(guardedHarness.backend?.recordedPaths.filter { $0.contains("/command/") }.count, 0)
+    }
+
     /// Angstrom-only: §4.15 — `start()` without a cloud client throws `.cloudOnlyFunctionality` and records
     /// it; `stop()` without one is a no-op.
     func testStartWithoutCloudThrowsAndStopIsNoOp() async throws {
@@ -196,6 +303,43 @@ final class MachineTransportRoutingTests: XCTestCase {
         machine.renderDashboard()
         XCTAssertEqual(machine.dashboard, fixture)
         XCTAssertNil(machine.bluetoothBrewingUpdate)
+    }
+
+    /// Angstrom-only: §4.19 (amended) — `refreshDashboard()` returns the **rendered** dashboard (base + the
+    /// BLE brewing overlay), as `refreshDashboardFromBluetooth()` does, while the base (and the snapshot)
+    /// hold the plain REST value. The overlay is put in place by setting `bluetoothBrewingUpdate` directly
+    /// (the shot-counter entry points belong to BT-W3-09).
+    func testRefreshDashboardReturnsRenderedDashboard() async throws {
+        let harness = BluetoothMachineHarness(model: .lineaMicra, seed: .standard, bluetooth: false)
+        let machine = harness.machine
+        let fixture = try decodeDashboard("dashboard_micra")
+        XCTAssertEqual(fixture.machineStatus?.status, .standby)
+        XCTAssertNil(fixture.machineStatus?.brewingStartTime)
+
+        let receivedAt = Date(timeIntervalSince1970: 1_767_268_830)
+        let update = BluetoothShotCounterUpdate(state: .brewing, timerValue: 30, receivedAt: receivedAt,
+                                                raw: BluetoothBrewingData(ev: true, brewingTime: 30))
+        let startTime = Date(timeIntervalSince1970: 1_767_268_800)
+        XCTAssertEqual(update.brewingStartTime, startTime)
+        machine.bluetoothBrewingUpdate = update
+
+        let returned = try await machine.refreshDashboard()
+        let rendered = fixture.overlayingBluetoothBrewing(update)
+        XCTAssertNotEqual(rendered, fixture, "the overlay must make the rendered value differ from the REST value")
+        XCTAssertEqual(returned, rendered, "refreshDashboard() returns base + overlay")
+        XCTAssertEqual(returned, machine.dashboard)
+        XCTAssertEqual(returned.machineStatus?.status, .brewing)
+        XCTAssertEqual(returned.machineStatus?.brewingStartTime, startTime)
+        XCTAssertEqual(machine.baseDashboard, fixture, "the base keeps the REST value")
+        XCTAssertEqual(machine.snapshot.dashboard, fixture)
+        XCTAssertNotNil(machine.lastUpdateAt)
+        XCTAssertNil(machine.lastError)
+
+        // No overlay held: the rendered value is the REST value.
+        machine.bluetoothBrewingUpdate = nil
+        let plain = try await machine.refreshDashboard()
+        XCTAssertEqual(plain, fixture)
+        XCTAssertEqual(machine.dashboard, fixture)
     }
 
     /// Angstrom-only: §4.19 — a websocket push is merged into the base, not set wholesale: a push with no
