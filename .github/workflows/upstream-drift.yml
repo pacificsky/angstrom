@@ -57,7 +57,8 @@ jobs:
             exit 0
           fi
 
-          # 3. How far ahead, and what changed (cloud-relevant paths only).
+          # 3. How far ahead, and what changed (every upstream commit; the compare is
+          #    unfiltered, since both cloud and Bluetooth changes are ported).
           cmp=$(gh api "repos/$UPSTREAM_REPO/compare/$base_sha...$latest_ver" 2>/dev/null || true)
           if [ -z "$cmp" ]; then
             echo "::warning::Could not compare $base_sha...$latest_ver; opening issue with version info only."
@@ -94,7 +95,7 @@ jobs:
           - **Ahead by:** $ahead commit(s)
           - **Compare:** $compare_url
 
-          Follow the *Syncing to a newer upstream* runbook in UPSTREAM.md: review the diff, port cloud-relevant changes (skip Bluetooth-only), then bump the watermark markers in the same PR.
+          Follow the *Syncing to a newer upstream* runbook in UPSTREAM.md: review the diff, port cloud and Bluetooth changes, then bump the watermark markers in the same PR.
 
           ### Commits since watermark
           $commits
