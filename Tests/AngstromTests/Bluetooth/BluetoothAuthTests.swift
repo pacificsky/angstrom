@@ -23,7 +23,7 @@ final class BluetoothAuthTests: XCTestCase {
             XCTAssertEqual((error as? LocalizedError)?.errorDescription,
                            "Bluetooth authentication failed. The Bluetooth token is likely wrong.")
         }
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
 
         let link = try XCTUnwrap(rig.central.links.first)
         XCTAssertEqual(rig.central.links.count, 1)
@@ -80,14 +80,14 @@ final class BluetoothAuthTests: XCTestCase {
         await fulfillment(of: [authStarted], timeout: 5)
         task.cancel()
         held.open()
-        do {
-            _ = try await task.value
+        guard let outcome = await boundedResult(of: task, "the cancelled command") else { return }
+        switch outcome {
+        case .success:
             XCTFail("expected CancellationError")
-        } catch is CancellationError {
-        } catch {
-            XCTFail("expected CancellationError, got \(error)")
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
         }
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
 
         XCTAssertEqual(link.recordedOps, [.discover(refresh: false), .write(authChar, Data("token".utf8)),
                                           .read(authChar), .disconnect],
@@ -115,7 +115,7 @@ final class BluetoothAuthTests: XCTestCase {
         await assertThrows(.bluetoothAuthenticationFailed) { try await rig.client.setPower(on: true) }
         let failed = await rig.client.authenticationFailed
         XCTAssertTrue(failed)
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
 
         // The machine was paired with the client's token (the next link accepts it).
         let status = try await rig.client.setPower(on: true)
@@ -134,7 +134,7 @@ final class BluetoothAuthTests: XCTestCase {
         let raw = await rig.client.rawFrames()
 
         await assertThrows(.bluetoothAuthenticationFailed) { try await rig.client.setPower(on: true) }
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
 
         let seen = await drain(events)
         XCTAssertEqual(seen, [], "no .connected, and no .disconnected either")
@@ -202,7 +202,7 @@ final class BluetoothAuthTests: XCTestCase {
             let events = await rig.client.connectionEvents()
 
             await assertThrows(testCase.expected, testCase.label) { try await rig.client.setPower(on: true) }
-            await rig.client.drainBackgroundWorkForTesting()
+            await settle(rig.client)
 
             let expectedReads = failWrite ? 0 : failingRead
             XCTAssertEqual(link.recordedOps, [.discover(refresh: false), .write(authChar, Data("token".utf8))]
@@ -233,7 +233,13 @@ final class BluetoothAuthTests: XCTestCase {
             XCTAssertEqual(rig.sleeper.requested(.authPoll), Array(repeating: .milliseconds(50), count: poll))
             rig.sleeper.fire(.authPoll)
         }
-        switch await command.result {
+        // Hang guard: a client that sleeps once more parks the command on an unfired `.authPoll`
+        // sleep; the bounded wait fails the test and cancels it instead of hanging the run.
+        guard let outcome = await boundedResult(of: command, "the auth poll after 9 sleeps") else {
+            XCTFail("auth reads: \(authReads(link)), .authPoll sleeps requested: \(rig.sleeper.startedCount(.authPoll))")
+            return
+        }
+        switch outcome {
         case .success:
             XCTFail("the wrong token never confirms")
         case .failure(let error):
@@ -249,7 +255,7 @@ final class BluetoothAuthTests: XCTestCase {
         _ = try await quick.client.setPower(on: true)
         XCTAssertEqual(quick.sleeper.requested(.authPoll), [])
         await quick.client.disconnect()
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
     }
 
     /// Angstrom-only: G-AUTH-3 — `authenticationFailed` reflects the last auth read and is unchanged by failures before auth
@@ -269,21 +275,21 @@ final class BluetoothAuthTests: XCTestCase {
                 _ = try await rig.client.setPower(on: true)
                 await rig.client.disconnect()
             }
-            await rig.client.drainBackgroundWorkForTesting()
+            await settle(rig.client)
             var flag = await rig.client.authenticationFailed
             XCTAssertEqual(flag, expectedFlag, phase)
 
             // Connect attempts exhausted.
             for _ in 0..<3 { rig.central.enqueueConnect(.failure(.disconnected(code: 7))) }
             await assertThrows(connectFailure, phase) { try await rig.client.setPower(on: true) }
-            await rig.client.drainBackgroundWorkForTesting()
+            await settle(rig.client)
             flag = await rig.client.authenticationFailed
             XCTAssertEqual(flag, expectedFlag, "\(phase): connect failure")
 
             // Bluetooth off.
             rig.central.setAvailability(.poweredOff)
             await assertThrows(.bluetoothUnavailable(.poweredOff), phase) { try await rig.client.setPower(on: true) }
-            await rig.client.drainBackgroundWorkForTesting()
+            await settle(rig.client)
             rig.central.setAvailability(.poweredOn)
             flag = await rig.client.authenticationFailed
             XCTAssertEqual(flag, expectedFlag, "\(phase): unavailable")
@@ -293,7 +299,7 @@ final class BluetoothAuthTests: XCTestCase {
             noAuth.present = [readChar, writeChar, BluetoothConstants.shotCounterCharacteristic]
             rig.central.enqueueConnect(.success(noAuth))
             await assertThrows(missingAuth, phase) { try await rig.client.setPower(on: true) }
-            await rig.client.drainBackgroundWorkForTesting()
+            await settle(rig.client)
             XCTAssertEqual(noAuth.recordedOps, [.discover(refresh: false), .disconnect], phase)
             flag = await rig.client.authenticationFailed
             XCTAssertEqual(flag, expectedFlag, "\(phase): missing auth characteristic")
@@ -307,7 +313,7 @@ final class BluetoothAuthTests: XCTestCase {
                 rig.central.enqueueConnect(.success(broken))
                 await assertThrows(.bluetoothConnectionFailed("Failed to connect to machine with Bluetooth: disconnected (code 7)"),
                                    phase) { try await rig.client.setPower(on: true) }
-                await rig.client.drainBackgroundWorkForTesting()
+                await settle(rig.client)
                 XCTAssertEqual(broken.recordedOps.filter { $0 == .read(authChar) }.count, failWrite ? 0 : 1, phase)
                 flag = await rig.client.authenticationFailed
                 XCTAssertEqual(flag, expectedFlag, "\(phase): transport error during auth (failWrite: \(failWrite))")
@@ -317,7 +323,7 @@ final class BluetoothAuthTests: XCTestCase {
         // The last read decides: [0x00] then [0x01] clears it within one auth.
         rig.central.enqueueConnect(.success(.laMarzocco(token: "other")))
         await assertThrows(.bluetoothAuthenticationFailed) { try await rig.client.setPower(on: true) }
-        await rig.client.drainBackgroundWorkForTesting()
+        await settle(rig.client)
         rig.central.enqueueConnect(.success(.laMarzocco(token: "token", confirmOnRead: 2)))
         _ = try await rig.client.setPower(on: true)
         let final = await rig.client.authenticationFailed
@@ -368,15 +374,48 @@ final class BluetoothAuthTests: XCTestCase {
         }.value
     }
 
-    private func assertThrows<T>(_ expected: LaMarzoccoError, _ message: String = "",
-                                 file: StaticString = #filePath, line: UInt = #line,
-                                 _ operation: () async throws -> T) async {
-        do {
-            _ = try await operation()
+    /// Awaits `operation`, which must throw `expected` (hang guard: 5 s). Returns whether it finished.
+    @discardableResult
+    private func assertThrows<T: Sendable>(_ expected: LaMarzoccoError, _ message: String = "",
+                                           file: StaticString = #filePath, line: UInt = #line,
+                                           _ operation: @escaping @Sendable () async throws -> T) async -> Bool {
+        guard let outcome = await boundedResult(of: Task { try await operation() }, "expected \(expected) \(message)",
+                                                file: file, line: line) else { return false }
+        switch outcome {
+        case .success:
             XCTFail("expected \(expected) \(message)", file: file, line: line)
-        } catch {
+        case .failure(let error):
             XCTAssertEqual(error as? LaMarzoccoError, expected, "\(message) got \(error)", file: file, line: line)
         }
+        return true
+    }
+
+    /// `drainBackgroundWorkForTesting()` under the hang guard (5 s): a drop parked on a leaked gate
+    /// or a reconnect loop parked on a manual sleep fails the test instead of hanging the run.
+    private func settle(_ client: LaMarzoccoBluetoothClient, file: StaticString = #filePath, line: UInt = #line) async {
+        _ = await boundedResult(of: Task { await client.drainBackgroundWorkForTesting() }, "background work drained",
+                                file: file, line: line)
+    }
+
+    /// Awaits `task`'s result (hang guard: 5 s). On a timeout it records a failure, cancels `task` and
+    /// returns nil without waiting any longer, so a client regression that parks the task fails the
+    /// test instead of hanging the whole run.
+    private func boundedResult<T: Sendable, Failure: Error>(of task: Task<T, Failure>, _ what: String,
+                                                            timeout: TimeInterval = 5,
+                                                            file: StaticString = #filePath,
+                                                            line: UInt = #line) async -> Result<T, Failure>? {
+        let finished = XCTestExpectation(description: what)
+        let waiter = Task { () -> Result<T, Failure> in
+            let result = await task.result
+            finished.fulfill()
+            return result
+        }
+        guard await XCTWaiter().fulfillment(of: [finished], timeout: timeout) == .completed else {
+            XCTFail("hang guard: \(what) did not finish within \(timeout) s", file: file, line: line)
+            task.cancel()
+            return nil
+        }
+        return await waiter.value
     }
 }
 
