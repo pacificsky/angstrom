@@ -596,7 +596,8 @@ final class BluetoothClientCoreTests: XCTestCase {
 
         // A fired timer that is reset (the link was used) before its drop gets the gate drops nothing,
         // and the new timer it was replaced by stays armed. (Depending on scheduling, the fired task
-        // sees its cancellation right after the sleep or after it got the gate; both must abandon.)
+        // sees its cancellation right after the sleep or after it got the gate; both must abandon.
+        // testIdleDropCancelledAtGateIsAbandoned pins the at-gate branch deterministically.)
         let events2 = await rig.client.connectionEvents()
         await rig.client.inspect { $0.resetIdleTimer() }
         await rig.sleeper.waitForPending(.idleDisconnect, count: 1)
@@ -657,6 +658,70 @@ final class BluetoothClientCoreTests: XCTestCase {
         let state = await rig.client.inspect { ($0.isConnected, $0.hasBackgroundWorkForTesting) }
         XCTAssertFalse(state.0)
         XCTAssertFalse(state.1)
+    }
+
+    /// Angstrom-only: §4.6 — an idle drop whose task is cancelled (the timer was reset because the link
+    /// was used) while it is queued on the connection gate is abandoned once it gets the gate: the link
+    /// stays up and the replacement timer stays armed. Upstream's `_drop_connection` gets `CancelledError`
+    /// from its lock wait (`BT:282-291`); the Swift gate is not cancellable, so `dropConnection` checks
+    /// after acquiring. Deterministic: the idle task is queued on the held gate before the reset.
+    func testIdleDropCancelledAtGateIsAbandoned() async throws {
+        let rig = makeRig()
+        _ = try await rig.client.ensureConnected()
+        let link = try XCTUnwrap(rig.central.links.first)
+        await rig.sleeper.waitForPending(.idleDisconnect, count: 1)
+        let events = await rig.client.connectionEvents()
+
+        // The idle task, past its fired sleep, queued on the held connection gate.
+        await rig.client.acquire(.connection)
+        let queued = expectation(description: "idle drop queued on the gate")
+        await rig.client.startIdleDropQueuedOnGate { queued.fulfill() }
+        await fulfillment(of: [queued], timeout: 5)
+        let queuedState = await rig.client.inspect { ($0.gateWaiters[.connection]?.count ?? 0, $0.idleTask) }
+        XCTAssertEqual(queuedState.0, 1, "the idle drop waits for the gate")
+        let queuedDrop = try XCTUnwrap(queuedState.1)
+        XCTAssertEqual(rig.sleeper.pendingCount(.idleDisconnect), 0, "the original sleep was replaced")
+
+        // The link is used: the timer is reset, which cancels the queued drop and arms a new timer.
+        await rig.client.inspect { $0.resetIdleTimer() }
+        await rig.sleeper.waitForPending(.idleDisconnect, count: 1)
+        XCTAssertTrue(queuedDrop.isCancelled)
+        let replacement = await rig.client.inspect { $0.idleTask }
+        XCTAssertNotNil(replacement)
+
+        // Only now does the cancelled drop get the gate.
+        await rig.client.release(.connection)
+        await queuedDrop.value
+        let state = await rig.client.inspect {
+            ($0.link === link, $0.idleTask == replacement, $0.reportedConnected, $0.gateBusy, $0.linkWatcher != nil)
+        }
+        XCTAssertTrue(state.0, "the abandoned drop left the link up")
+        XCTAssertTrue(state.1, "the replacement timer is untouched")
+        XCTAssertTrue(state.2, "no .disconnected was reported")
+        XCTAssertEqual(state.3, [], "the abandoned drop released the gate")
+        XCTAssertTrue(state.4)
+        XCTAssertFalse(link.recordedOps.contains(.disconnect))
+        XCTAssertEqual(rig.sleeper.pendingCount(.idleDisconnect), 1)
+        let abandoned = await drain(events)
+        XCTAssertEqual(abandoned, [], "no connection event from the abandoned drop")
+
+        // Control: the same queued idle drop, not cancelled, does disconnect when it gets the gate.
+        let controlEvents = await rig.client.connectionEvents()
+        await rig.client.acquire(.connection)
+        let queuedAgain = expectation(description: "uncancelled idle drop queued on the gate")
+        await rig.client.startIdleDropQueuedOnGate { queuedAgain.fulfill() }
+        await fulfillment(of: [queuedAgain], timeout: 5)
+        let controlTask = await rig.client.inspect { $0.idleTask }
+        let controlDrop = try XCTUnwrap(controlTask)
+        await rig.client.release(.connection)
+        await controlDrop.value
+        let controlState = await rig.client.inspect { ($0.isConnected, $0.idleTask == nil, $0.gateBusy) }
+        XCTAssertFalse(controlState.0)
+        XCTAssertTrue(controlState.1)
+        XCTAssertEqual(controlState.2, [])
+        XCTAssertEqual(link.recordedOps.filter { $0 == .disconnect }.count, 1)
+        let dropped = await drain(controlEvents)
+        XCTAssertEqual(dropped, [.disconnected])
     }
 
     // MARK: Link events
@@ -1354,6 +1419,18 @@ extension LaMarzoccoBluetoothClient {
     /// Runs `body` on the actor: read or set internal state from a test.
     fileprivate func inspect<T: Sendable>(_ body: @Sendable (isolated LaMarzoccoBluetoothClient) -> T) -> T {
         body(self)
+    }
+
+    /// Replaces the idle task with one standing at the point where its sleep has fired: it calls
+    /// `dropConnection(fromIdleTimer: true)`. `queued` runs in the same actor turn as the drop's
+    /// `acquire(.connection)`, so once it ran and a test then hops onto the actor, the drop is queued
+    /// on a held gate (no polling).
+    fileprivate func startIdleDropQueuedOnGate(queued: @escaping @Sendable () -> Void) {
+        idleTask?.cancel()
+        idleTask = Task {
+            queued()
+            await self.dropConnection(fromIdleTimer: true)
+        }
     }
 
     /// `acquire(gate)` that records, in the same actor turn, when it queued and when it got the gate.
