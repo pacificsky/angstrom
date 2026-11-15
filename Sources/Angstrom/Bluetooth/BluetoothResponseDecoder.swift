@@ -160,8 +160,13 @@ package enum BluetoothResponseDecoder {
         }
     }
 
-    /// Parses the response text as JSON with fragments allowed.
+    /// Parses the response text as JSON with fragments allowed. A leading UTF-8 BOM (U+FEFF) is
+    /// rejected (§3.6): Python's `json.loads(str)` raises "Unexpected UTF-8 BOM", while
+    /// `JSONSerialization` alone would silently skip it.
     private static func parse(_ text: String, context: String) throws -> Any {
+        if text.unicodeScalars.first == "\u{FEFF}" {
+            throw failure(context, "unexpected UTF-8 BOM: \(text.debugDescription)")
+        }
         do {
             return try JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)
         } catch {
