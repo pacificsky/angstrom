@@ -183,8 +183,10 @@ subscribe frames are captured. If `startShotCounter()` returns `false` it prints
 
 - `Redact.bluetoothFrame(_ frame: RawBluetoothFrame) -> (hex: String, text: String?)`
   in `Output.swift`. If `frame.isSecret`, **both** become `"**REDACTED**"`
-  (`Redact.placeholder`). This covers the auth write and the token read. Every
-  raw BLE line goes through it; nothing bypasses it.
+  (`Redact.placeholder`). Today the only secret frame the library emits is the
+  auth write: `readToken` is static and taps nothing (so `ble token` produces no
+  raw frame), but any token-read frame a later library version emits is flagged
+  too. Every raw BLE line goes through it; nothing bypasses it.
 - Defence in depth: also redact any write to
   `0d0b7847-e12b-09a8-b04b-8e0922a9abab` (auth) and any read of
   `0c0b7847-e12b-09a8-b04b-8e0922a9abab` (token), whatever `isSecret` says.
