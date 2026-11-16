@@ -18,35 +18,86 @@ public final class LaMarzoccoMachine {
     /// The machine's serial number.
     public let serialNumber: String
 
-    private let client: LaMarzoccoCloudClient
+    /// The cloud client, if this machine was created with one (upstream
+    /// `LaMarzoccoThing._cloud_client`). Cloud-only operations go through
+    /// ``client``, which throws when this is `nil`.
+    let cloudClient: LaMarzoccoCloudClient?
+    /// The Bluetooth client, if this machine was created with one.
+    public let bluetooth: LaMarzoccoBluetoothClient?
+    /// Cloud client or `.cloudOnlyFunctionality` (upstream `@cloud_only`).
+    var client: LaMarzoccoCloudClient {
+        get throws {
+            guard let cloudClient else { throw LaMarzoccoError.cloudOnlyFunctionality }
+            return cloudClient
+        }
+    }
 
+    /// Rendered dashboard: `baseDashboard` + the BLE brewing overlay.
+    ///
     /// The last-known dashboard (typed widgets + identity). Updated by
     /// ``refreshDashboard()``, live websocket pushes, and optimistic command
-    /// updates.
-    public private(set) var dashboard: Dashboard?
+    /// updates. While no Bluetooth brewing update is held it equals the base
+    /// dashboard.
+    public internal(set) var dashboard: Dashboard?
+    /// Everything except the overlay; what snapshots persist.
+    var baseDashboard: Dashboard?
     /// The last-known settings (connectivity, plumb-in, firmware).
-    public private(set) var settings: MachineSettings?
+    public internal(set) var settings: MachineSettings?
     /// The last-known scheduling config (smart standby, wake-ups).
-    public private(set) var schedule: MachineSchedule?
+    public internal(set) var schedule: MachineSchedule?
     /// The last-known statistics (refreshed on demand; not part of snapshots).
-    public private(set) var statistics: ThingStatistics?
+    public internal(set) var statistics: ThingStatistics?
     /// Whether live updates are currently subscribed — i.e. between a successful
     /// ``start()`` and ``stop()``. The underlying socket may transiently drop and
     /// auto-reconnect while this stays `true`; it reflects the *subscription*, not
     /// the moment-to-moment socket connection — see ``isConnected`` for that.
-    public private(set) var isLive = false
+    public internal(set) var isLive = false
     /// Whether the live websocket is *actually* connected right now. Unlike
     /// ``isLive`` this flips `false` during silent drops and zombie-socket
     /// gaps while auto-reconnect works, so UIs can show "live" vs "stale"
     /// honestly.
-    public private(set) var isConnected = false
+    public internal(set) var isConnected = false
     /// When ``dashboard`` last changed from the cloud — a REST refresh or an
     /// applied websocket push. `nil` until the first of either. Lets UIs show
     /// "last update Nm ago" instead of trusting a stale value.
-    public private(set) var lastUpdateAt: Date?
+    public internal(set) var lastUpdateAt: Date?
     /// The most recent error from a refresh, command, or the live connection.
     /// Cleared automatically when a subsequent operation succeeds.
-    public private(set) var lastError: Error?
+    public internal(set) var lastError: Error?
+
+    // MARK: Bluetooth state
+
+    /// Whether the Bluetooth client holds an authenticated link (upstream
+    /// `bluetooth_connected`). Always `false` without a Bluetooth client.
+    public internal(set) var isBluetoothConnected: Bool = false
+    /// Whether the Bluetooth shot counter is subscribed (upstream
+    /// `bluetooth_shot_counter_active`).
+    public internal(set) var isShotCounterActive: Bool = false
+    /// The latest brewing update from the Bluetooth shot counter, overlaid on
+    /// ``dashboard`` (upstream `ble_brewing_update`).
+    public internal(set) var bluetoothBrewingUpdate: BluetoothShotCounterUpdate? = nil
+    /// The latest live values sent with the Bluetooth shot counter (upstream
+    /// `bluetooth_telemetry`).
+    public internal(set) var bluetoothTelemetry: BluetoothMachineTelemetry = BluetoothMachineTelemetry()
+    /// The duration (s) of the last shot reported over Bluetooth (upstream
+    /// `last_shot_time`).
+    public internal(set) var lastShotTime: TimeInterval? = nil
+
+    // MARK: Bluetooth plumbing
+
+    /// Iterates the Bluetooth client's shot-counter stream while it runs.
+    @ObservationIgnored var shotCounterTask: Task<Void, Never>?
+    /// Mirrors the Bluetooth client's connection events into ``isBluetoothConnected``.
+    @ObservationIgnored var bluetoothConnectionTask: Task<Void, Never>?
+    /// Clears the brewing overlay once no update arrived for ``bluetoothBrewingStateTimeout``.
+    @ObservationIgnored var brewingExpiryTask: Task<Void, Never>?
+    /// Listeners of ``bluetoothEvents()``, keyed per stream.
+    @ObservationIgnored var bluetoothEventListeners: [UUID: AsyncStream<MachineBluetoothEvent>.Continuation] = [:]
+    /// Drop the BLE brewing state when no notification arrived for this long
+    /// (upstream `BLE_BREWING_STATE_TIMEOUT = 60`).
+    @ObservationIgnored var bluetoothBrewingStateTimeout: Duration = .seconds(60)
+    /// The sleep the brewing expiry waits on (test seam).
+    @ObservationIgnored var brewingExpirySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 
     private var updateTask: Task<Void, Never>?
     /// Mirrors the client's connection events into ``isConnected`` and re-fetches
@@ -60,25 +111,73 @@ public final class LaMarzoccoMachine {
     /// teardown can't clobber state owned by a newer session.
     private var liveGeneration = 0
 
-    /// Create a machine view. Pass a previously persisted ``MachineSnapshot`` to
-    /// render stale state immediately on launch (it is adopted only if its serial
-    /// matches).
-    public init(
+    /// Create a cloud-only machine view. Pass a previously persisted
+    /// ``MachineSnapshot`` to render stale state immediately on launch (it is
+    /// adopted only if its serial matches).
+    ///
+    /// Existing signature, unchanged behaviour (cloud only); delegates to
+    /// ``init(serialNumber:client:bluetooth:snapshot:)`` with no Bluetooth client.
+    public convenience init(
         serialNumber: String,
         client: LaMarzoccoCloudClient,
         snapshot: MachineSnapshot? = nil
     ) {
+        self.init(serialNumber: serialNumber, client: client, bluetooth: nil, snapshot: snapshot)
+    }
+
+    /// Designated. Either client may be nil (upstream
+    /// `LaMarzoccoThing(serial, cloud_client, bluetooth_client)`).
+    ///
+    /// Without a cloud client, cloud-only operations throw
+    /// `LaMarzoccoError.cloudOnlyFunctionality`. With a Bluetooth client, the
+    /// machine starts observing its connection events. A ``MachineSnapshot`` is
+    /// adopted only if its serial matches.
+    public init(serialNumber: String, client: LaMarzoccoCloudClient?, bluetooth: LaMarzoccoBluetoothClient?,
+                snapshot: MachineSnapshot? = nil) {
         self.serialNumber = serialNumber
-        self.client = client
+        self.cloudClient = client
+        self.bluetooth = bluetooth
         if let snapshot, snapshot.serialNumber == serialNumber {
-            self.dashboard = snapshot.dashboard
             self.settings = snapshot.settings
             self.schedule = snapshot.schedule
+            setBaseDashboard(snapshot.dashboard)
+        }
+        if bluetooth != nil {
+            startObservingBluetoothConnection()
         }
     }
 
     /// Test seam: the underlying client, so tests can inject a mock websocket.
-    var clientForTesting: LaMarzoccoCloudClient { client }
+    var clientForTesting: LaMarzoccoCloudClient { cloudClient! }
+
+    /// Whether this machine was created with a cloud client (upstream
+    /// `cloud_client_available`).
+    public var hasCloudClient: Bool { cloudClient != nil }
+
+    /// Whether this machine was created with a Bluetooth client (upstream
+    /// `bluetooth_client_available`).
+    public var hasBluetoothClient: Bool { bluetooth != nil }
+
+    // MARK: - Base/overlay funnel
+
+    /// Replace the base dashboard wholesale, then re-render ``dashboard``.
+    func setBaseDashboard(_ dashboard: Dashboard?) {
+        baseDashboard = dashboard
+        renderDashboard()
+    }
+
+    /// Transform the base dashboard (if there is one), then re-render ``dashboard``.
+    func updateBaseDashboard(_ transform: (Dashboard) -> Dashboard) {
+        if let base = baseDashboard {
+            baseDashboard = transform(base)
+        }
+        renderDashboard()
+    }
+
+    /// Derive ``dashboard`` from the base dashboard and the BLE brewing overlay.
+    func renderDashboard() {
+        dashboard = bluetoothBrewingUpdate == nil ? baseDashboard : baseDashboard?.overlayingBluetoothBrewing(bluetoothBrewingUpdate)
+    }
 
     // MARK: - Derived
 
@@ -141,7 +240,7 @@ public final class LaMarzoccoMachine {
 
     /// A snapshot of the current state, suitable for persistence.
     public var snapshot: MachineSnapshot {
-        MachineSnapshot(serialNumber: serialNumber, dashboard: dashboard,
+        MachineSnapshot(serialNumber: serialNumber, dashboard: baseDashboard,
                         settings: settings, schedule: schedule)
     }
 
@@ -151,9 +250,12 @@ public final class LaMarzoccoMachine {
     public func refreshDashboard() async throws -> Dashboard {
         try await capturing {
             let value = try await client.dashboard(serial: serialNumber)
-            dashboard = value
+            setBaseDashboard(value)
             lastUpdateAt = Date()
-            return value
+            // The rendered dashboard (base + BLE brewing overlay), as
+            // `refreshDashboardFromBluetooth()` returns (SPEC §4.19). Equal to
+            // `value` while no overlay is held.
+            return dashboard ?? value
         }
     }
 
@@ -187,11 +289,12 @@ public final class LaMarzoccoMachine {
     /// Refresh dashboard, settings, and schedule concurrently.
     public func refreshAll() async throws {
         try await capturing {
+            let client = try self.client
             async let d = client.dashboard(serial: serialNumber)
             async let s = client.settings(serial: serialNumber)
             async let sc = client.schedule(serial: serialNumber)
             let (dashboard, settings, schedule) = try await (d, s, sc)
-            self.dashboard = dashboard
+            self.setBaseDashboard(dashboard)
             self.settings = settings
             self.schedule = schedule
             self.lastUpdateAt = Date()
@@ -208,6 +311,15 @@ public final class LaMarzoccoMachine {
     /// (or seeding a snapshot), early pushes are dropped until a dashboard exists.
     /// Call ``refreshDashboard()`` (or ``refreshAll()``) first.
     public func start() async throws {
+        // Upstream `@cloud_only`: without a cloud client this throws
+        // `.cloudOnlyFunctionality`, recorded in `lastError`.
+        let client: LaMarzoccoCloudClient
+        do {
+            client = try self.client
+        } catch {
+            lastError = error
+            throw error
+        }
         guard updateTask == nil, !isStarting else { return }
         isStarting = true
         liveGeneration += 1
@@ -221,8 +333,9 @@ public final class LaMarzoccoMachine {
         let task = Task { [weak self] in
             for await update in stream {
                 guard let self else { return }
-                if let current = self.dashboard {
-                    self.dashboard = current.applying(update)
+                // Not wholesale: `applying` keeps the base widgets for a widget-less push.
+                if self.baseDashboard != nil {
+                    self.updateBaseDashboard { $0.applying(update) }
                     self.lastUpdateAt = Date()
                 }
             }
@@ -274,71 +387,93 @@ public final class LaMarzoccoMachine {
         updateTask = nil
         connectionTask?.cancel()
         connectionTask = nil
-        await client.disconnectWebSocket()
+        await cloudClient?.disconnectWebSocket()
         isLive = false
         isConnected = false
     }
 
     // MARK: - Commands (forward to client, with optimistic local updates)
 
+    // The six BLE-first commands (SPEC §4.16, upstream `MACH:494-509,764-841,870-892`) route
+    // through `bluetoothFirst(bluetooth:cloud:)` inside `capturing`, after gating. The optimistic
+    // update follows a successful call on either transport.
+
     @discardableResult
     public func setPower(on: Bool) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setPower(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingMachineMode(on ? .brewing : .standby)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setPower(on: on) },
+                cloud: { try await $0.setPower(serial: serialNumber, on: on) })
+        }
+        updateBaseDashboard { $0.settingMachineMode(on ? .brewing : .standby) }
         return response
     }
 
     @discardableResult
     public func setSteam(on: Bool) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setSteam(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingSteamEnabled(on)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setSteam(on: on) },
+                cloud: { try await $0.setSteam(serial: serialNumber, on: on) })
+        }
+        updateBaseDashboard { $0.settingSteamEnabled(on) }
         return response
     }
 
     @discardableResult
     public func setSteamTargetLevel(_ level: SteamLevel) async throws -> CommandResponse {
         let response = try await capturing {
-            try requireModel(Self.steamLevelModels, "steam level")
-            return try await client.setSteamTargetLevel(serial: serialNumber, level)
+            try requireModel(Model.steamLevelModels, "steam level")
+            return try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .steam, celsius: Double(level.bluetoothTargetTemperature)) },
+                cloud: { try await $0.setSteamTargetLevel(serial: serialNumber, level) })
         }
-        dashboard = dashboard?.settingSteamTargetLevel(level)
+        updateBaseDashboard { $0.settingSteamTargetLevel(level) }
         return response
     }
 
     @discardableResult
     public func setCoffeeTargetTemperature(celsius: Double) async throws -> CommandResponse {
-        let response = try await capturing { try await client.setCoffeeTargetTemperature(serial: serialNumber, celsius: celsius) }
-        dashboard = dashboard?.settingCoffeeTargetTemperature(celsius)
+        let response = try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .coffee, celsius: celsius) },
+                cloud: { try await $0.setCoffeeTargetTemperature(serial: serialNumber, celsius: celsius) })
+        }
+        updateBaseDashboard { $0.settingCoffeeTargetTemperature(celsius) }
         return response
     }
 
     @discardableResult
     public func setSteamTargetTemperature(celsius: Double) async throws -> CommandResponse {
         let response = try await capturing {
-            try requireModel(Self.steamTemperatureModels, "steam temperature")
-            return try await client.setSteamTargetTemperature(serial: serialNumber, celsius: celsius)
+            try requireModel(Model.steamTemperatureModels, "steam temperature")
+            return try await bluetoothFirst(
+                bluetooth: { try await $0.setTemperature(boiler: .steam, celsius: celsius) },
+                cloud: { try await $0.setSteamTargetTemperature(serial: serialNumber, celsius: celsius) })
         }
-        dashboard = dashboard?.settingSteamTargetTemperature(celsius)
+        updateBaseDashboard { $0.settingSteamTargetTemperature(celsius) }
         return response
     }
 
     @discardableResult
     public func setBrewByWeightMode(_ mode: DoseMode) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.brewByWeightModels, "brew by weight")
             return try await client.setBrewByWeightMode(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingBrewByWeightMode(mode)
+        updateBaseDashboard { $0.settingBrewByWeightMode(mode) }
         return response
     }
 
     @discardableResult
     public func setBrewByWeightDoses(dose1: Double, dose2: Double) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.brewByWeightModels, "brew by weight")
             return try await client.setBrewByWeightDoses(serial: serialNumber, dose1: dose1, dose2: dose2)
         }
-        dashboard = dashboard?.settingBrewByWeightDoses(dose1: dose1, dose2: dose2)
+        updateBaseDashboard { $0.settingBrewByWeightDoses(dose1: dose1, dose2: dose2) }
         return response
     }
 
@@ -346,7 +481,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderBaristaLight(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderBaristaLight(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderBaristaLight(on)
+        updateBaseDashboard { $0.settingGrinderBaristaLight(on) }
         return response
     }
 
@@ -361,70 +496,77 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setMode(_ mode: MachineMode) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "machine mode")
             return try await client.setMode(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingMachineMode(mode)
+        updateBaseDashboard { $0.settingMachineMode(mode) }
         return response
     }
 
     @discardableResult
     public func setAutoFlush(on: Bool) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "auto flush")
             return try await client.setAutoFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingAutoFlush(on)
+        updateBaseDashboard { $0.settingAutoFlush(on) }
         return response
     }
 
     @discardableResult
     public func setSteamFlush(on: Bool) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "steam flush")
             return try await client.setSteamFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingSteamFlush(on)
+        updateBaseDashboard { $0.settingSteamFlush(on) }
         return response
     }
 
     @discardableResult
     public func setRinseFlush(on: Bool) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "rinse flush")
             return try await client.setRinseFlush(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingRinseFlushEnabled(on)
+        updateBaseDashboard { $0.settingRinseFlushEnabled(on) }
         return response
     }
 
     @discardableResult
     public func setRinseFlushTime(seconds: Double) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "rinse flush time")
             return try await client.setRinseFlushTime(serial: serialNumber, seconds: seconds)
         }
-        dashboard = dashboard?.settingRinseFlushTime(seconds)
+        updateBaseDashboard { $0.settingRinseFlushTime(seconds) }
         return response
     }
 
     @discardableResult
     public func setHotWaterDoseEnabled(on: Bool) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "hot water dose enable")
             return try await client.setHotWaterDoseEnabled(serial: serialNumber, on: on)
         }
-        dashboard = dashboard?.settingHotWaterDoseEnabled(on)
+        updateBaseDashboard { $0.settingHotWaterDoseEnabled(on) }
         return response
     }
 
     @discardableResult
     public func setHotWaterDose(dose: Double, doseIndex: DoseIndex) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.groupDoseModels, "hot water dose")
             return try await client.setHotWaterDose(serial: serialNumber, dose: dose, doseIndex: doseIndex)
         }
-        dashboard = dashboard?.settingHotWaterDose(dose, doseIndex: doseIndex)
+        updateBaseDashboard { $0.settingHotWaterDose(dose, doseIndex: doseIndex) }
         return response
     }
 
@@ -443,20 +585,22 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGroupMode(_ mode: MachineMode, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "group mode")
             return try await client.setGroupMode(serial: serialNumber, mode, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupMode(mode, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupMode(mode, groupIndex: groupIndex) }
         return response
     }
 
     @discardableResult
     public func setCoffeeBoilerEnabled(on: Bool, boilerIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "coffee boiler enable")
             return try await client.setCoffeeBoilerEnabled(serial: serialNumber, on: on, boilerIndex: boilerIndex)
         }
-        dashboard = dashboard?.settingCoffeeBoilerEnabled(on)
+        updateBaseDashboard { $0.settingCoffeeBoilerEnabled(on) }
         return response
     }
 
@@ -466,8 +610,9 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGroupDoseMode(_ mode: DoseMode, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.groupDoseModels, "group dose mode")
-            if let groupDoses = dashboard?.groupDoses,
+            if let groupDoses = baseDashboard?.groupDoses,
                !groupDoses.availableModes.isEmpty, !groupDoses.availableModes.contains(mode) {
                 let available = groupDoses.availableModes.map(\.rawValue)
                 throw LaMarzoccoError.operationNotAvailable(
@@ -475,7 +620,7 @@ public final class LaMarzoccoMachine {
             }
             return try await client.setGroupDoseMode(serial: serialNumber, mode, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupDoseMode(mode, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupDoseMode(mode, groupIndex: groupIndex) }
         return response
     }
 
@@ -485,8 +630,9 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGroupDose(mode: DoseMode, doseIndex: DoseIndex, dose: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.groupDoseModels, "group dose")
-            if let groupDoses = dashboard?.groupDoses {
+            if let groupDoses = baseDashboard?.groupDoses {
                 let doses = groupDoses.doses.settings(for: mode)
                 guard !doses.isEmpty else {
                     throw LaMarzoccoError.operationNotAvailable(
@@ -501,7 +647,7 @@ public final class LaMarzoccoMachine {
             return try await client.setGroupDose(serial: serialNumber, mode: mode, doseIndex: doseIndex,
                                                  dose: dose, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGroupDose(mode: mode, doseIndex: doseIndex, dose: dose, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGroupDose(mode: mode, doseIndex: doseIndex, dose: dose, groupIndex: groupIndex) }
         return response
     }
 
@@ -511,20 +657,22 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setBrewingPressure(pressure: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "brewing pressure")
-            if let groupDoses = dashboard?.groupDoses, !groupDoses.brewingPressureSupported {
+            if let groupDoses = baseDashboard?.groupDoses, !groupDoses.brewingPressureSupported {
                 throw LaMarzoccoError.operationNotAvailable(
                     "brewing pressure is not supported in the current dose mode (\(groupDoses.mode.rawValue))")
             }
             return try await client.setBrewingPressure(serial: serialNumber, pressure: pressure, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingBrewingPressure(pressure, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingBrewingPressure(pressure, groupIndex: groupIndex) }
         return response
     }
 
     @discardableResult
     public func setContinuousDoseEnabled(on: Bool, groupIndex: Int = 1) async throws -> CommandResponse {
         try await capturing {
+            let client = try self.client
             try requireModel(Self.groupDoseModels, "continuous dose enable")
             return try await client.setContinuousDoseEnabled(serial: serialNumber, on: on, groupIndex: groupIndex)
         }
@@ -533,6 +681,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setContinuousDose(seconds: Double, groupIndex: Int = 1) async throws -> CommandResponse {
         try await capturing {
+            let client = try self.client
             try requireModel(Self.groupDoseModels, "continuous dose")
             return try await client.setContinuousDose(serial: serialNumber, seconds: seconds, groupIndex: groupIndex)
         }
@@ -543,6 +692,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setMirrorGroup1(on: Bool, groupIndex: Int = 2) async throws -> CommandResponse {
         try await capturing {
+            let client = try self.client
             try requireModel(Self.stradaXModels, "mirror group 1")
             guard (2...3).contains(groupIndex) else {
                 throw LaMarzoccoError.operationNotAvailable("groupIndex must be 2 or 3")
@@ -558,7 +708,7 @@ public final class LaMarzoccoMachine {
     public func setGrinderPower(on: Bool) async throws -> CommandResponse {
         let mode: GrinderMode = on ? .grinding : .standby
         let response = try await capturing { try await client.setGrinderMode(serial: serialNumber, mode) }
-        dashboard = dashboard?.settingGrinderMode(mode)
+        updateBaseDashboard { $0.settingGrinderMode(mode) }
         return response
     }
 
@@ -566,10 +716,11 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderGrindWith(_ mode: GrinderGrindWithMode) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.swanGrinderModels, "grind-with mode")
             return try await client.setGrinderGrindWith(serial: serialNumber, mode)
         }
-        dashboard = dashboard?.settingGrinderGrindWith(mode)
+        updateBaseDashboard { $0.settingGrinderGrindWith(mode) }
         return response
     }
 
@@ -586,12 +737,12 @@ public final class LaMarzoccoMachine {
         if let speedLevel {
             try await setGrinderSpeed(doseIndex: doseIndex, level: speedLevel)
         }
-        let resolvedMode = mode ?? dashboard?.grinderDoses?.mode ?? .rev
+        let resolvedMode = mode ?? baseDashboard?.grinderDoses?.mode ?? .rev
         let response = try await capturing {
             try await client.setGrinderDose(serial: serialNumber, doseIndex: doseIndex, dose: dose,
                                             mode: resolvedMode)
         }
-        dashboard = dashboard?.settingGrinderDose(doseIndex: doseIndex, dose: dose, mode: resolvedMode)
+        updateBaseDashboard { $0.settingGrinderDose(doseIndex: doseIndex, dose: dose, mode: resolvedMode) }
         return response
     }
 
@@ -599,10 +750,11 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderMoreDose(revolutions: Double) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.swanGrinderModels, "more dose")
             return try await client.setGrinderMoreDose(serial: serialNumber, revolutions: revolutions)
         }
-        dashboard = dashboard?.settingGrinderMoreDose(revolutions)
+        updateBaseDashboard { $0.settingGrinderMoreDose(revolutions) }
         return response
     }
 
@@ -612,7 +764,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderSingleDoseMode(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderSingleDoseMode(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderSingleDose(on)
+        updateBaseDashboard { $0.settingGrinderSingleDose(on) }
         return response
     }
 
@@ -620,7 +772,7 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderMirrorDoses(on: Bool) async throws -> CommandResponse {
         let response = try await capturing { try await client.setGrinderMirrorDoses(serial: serialNumber, on: on) }
-        dashboard = dashboard?.settingGrinderMirrorDoses(on)
+        updateBaseDashboard { $0.settingGrinderMirrorDoses(on) }
         return response
     }
 
@@ -628,10 +780,11 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderSpeed(doseIndex: DoseIndex, level: GrinderSpeedLevel) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.swanGrinderModels, "grinder speed")
             return try await client.setGrinderSpeed(serial: serialNumber, doseIndex: doseIndex, speedLevel: level)
         }
-        dashboard = dashboard?.settingGrinderSpeed(doseIndex: doseIndex, level: level)
+        updateBaseDashboard { $0.settingGrinderSpeed(doseIndex: doseIndex, level: level) }
         return response
     }
 
@@ -640,11 +793,12 @@ public final class LaMarzoccoMachine {
     @discardableResult
     public func setGrinderAutoSpeed(doseIndex: DoseIndex, enabled: Bool, groupIndex: Int = 1) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.swanGrinderModels, "automatic grinder speed")
             return try await client.setGrinderAutoSpeedEnabled(serial: serialNumber, doseIndex: doseIndex,
                                                                enabled: enabled, groupIndex: groupIndex)
         }
-        dashboard = dashboard?.settingGrinderAutoSpeed(doseIndex: doseIndex, enabled: enabled, groupIndex: groupIndex)
+        updateBaseDashboard { $0.settingGrinderAutoSpeed(doseIndex: doseIndex, enabled: enabled, groupIndex: groupIndex) }
         return response
     }
 
@@ -657,14 +811,17 @@ public final class LaMarzoccoMachine {
         doseMass: Double? = nil, dosePulses: Double? = nil, rateLock: Bool = false
     ) async throws -> CommandResponse {
         let response = try await capturing {
+            let client = try self.client
             try requireModel(Self.swanGrinderModels, "automatic grinder speed")
             return try await client.setGrinderAutoSpeedReference(
                 serial: serialNumber, doseMode: doseMode, extractionSeconds: extractionSeconds,
                 doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
         }
-        dashboard = dashboard?.settingGrinderAutoSpeedReference(
-            doseMode: doseMode, extractionSeconds: extractionSeconds,
-            doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        updateBaseDashboard {
+            $0.settingGrinderAutoSpeedReference(
+                doseMode: doseMode, extractionSeconds: extractionSeconds,
+                doseMass: doseMass, dosePulses: dosePulses, rateLock: rateLock)
+        }
         return response
     }
 
@@ -707,7 +864,11 @@ public final class LaMarzoccoMachine {
             let mode = enabled ? String(format: "%02d:%02d", minutes / 60, minutes % 60) : "Off"
             return try await setAutoStandby(mode: mode)
         }
-        return try await capturing { try await client.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) }
+        return try await capturing {
+            try await bluetoothFirst(
+                bluetooth: { try await $0.setSmartStandby(enabled: enabled, mode: after, minutes: minutes) },
+                cloud: { try await $0.setSmartStandby(serial: serialNumber, enabled: enabled, minutes: minutes, after: after) })
+        }
     }
 
     /// Set the auto-standby mode string directly (`"HH:MM"` / `"Off"`). Most
@@ -741,15 +902,19 @@ public final class LaMarzoccoMachine {
 
     // MARK: - Model gating
 
-    static let steamLevelModels: Set<Model> = [.lineaMicra, .lineaMiniR]
-    static let steamTemperatureModels: Set<Model> = [.gs3, .gs3AV, .gs3MP, .stradaX]
+    // Cloud resolution precedes gating (SPEC §4.15): every cloud-only, gated method resolves
+    // `let client = try self.client` before `requireModel` and its argument guards, so a
+    // cloud-less machine always gets `.cloudOnlyFunctionality` (upstream's `@cloud_only` is the
+    // outermost decorator). The BLE-first commands gate first (SPEC §4.16).
+    // Steam level / steam temperature gate on the core sets `Model.steamLevelModels` /
+    // `Model.steamTemperatureModels`, shared with the Bluetooth layer.
     static let brewByWeightModels: Set<Model> = [.lineaMini, .lineaMiniR]
     static let stradaXModels: Set<Model> = [.stradaX]
     /// Group-dose commands the GS3 AV also accepts (upstream `@models_supported`).
     static let groupDoseModels: Set<Model> = [.stradaX, .gs3AV]
     static let swanGrinderModels: Set<Model> = [.swan]
 
-    private func requireModel(_ supported: Set<Model>, _ what: String) throws {
+    func requireModel(_ supported: Set<Model>, _ what: String) throws {
         guard let model, supported.contains(model) else {
             let names = supported.map(\.displayName).sorted().joined(separator: ", ")
             throw LaMarzoccoError.unsupportedModel("\(what) is only supported on \(names)")
@@ -761,7 +926,7 @@ public final class LaMarzoccoMachine {
     /// Run a throwing operation, recording any failure in ``lastError`` before
     /// rethrowing so observers can surface it, and clearing ``lastError`` on
     /// success so a stale error doesn't linger in the UI.
-    private func capturing<T>(_ body: () async throws -> T) async throws -> T {
+    func capturing<T>(_ body: () async throws -> T) async throws -> T {
         do {
             let value = try await body()
             lastError = nil

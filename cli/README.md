@@ -1,9 +1,12 @@
-# `angcli` — Angstrom cloud-API debugging CLI
+# `angcli` — Angstrom cloud-API and Bluetooth debugging CLI
 
 A small command-line tool for **learning and debugging the La Marzocco cloud
-API** through [Angstrom](..). It authenticates with your account, holds the
-dashboard websocket open like a real client, and prints what the server sends —
-raw STOMP frames in both directions and Angstrom's decoded view, side by side.
+API and Bluetooth protocol** through [Angstrom](..). It authenticates with your
+account, holds the dashboard websocket open like a real client, and prints what
+the server sends — raw STOMP frames in both directions and Angstrom's decoded
+view, side by side. With [`angcli ble`](#ble-subcommand--bluetooth) it talks to
+a nearby machine over Bluetooth instead and prints raw Bluetooth frames next to
+the decoded shot-counter events.
 
 This is a **separate, nested SwiftPM package**. It depends on the in-repo
 `Angstrom` library by path and is *not* part of the library build, so apps that
@@ -11,7 +14,8 @@ depend on `Angstrom` never pull in this tool or its `swift-argument-parser`
 dependency. See [`SPEC.md`](SPEC.md) for the full design rationale.
 
 > ⚠️ This talks to the **real** La Marzocco cloud with **real** credentials.
-> Mind rate limits and the La Marzocco ToS.
+> Mind rate limits and the La Marzocco ToS. `angcli ble cmd` **actuates your
+> real machine** and refuses to run without `--confirm`.
 
 ## Build & run
 
@@ -58,12 +62,14 @@ replaced with `**REDACTED**`, so `dump`/`listen` output is safe to paste.
 | [`listen`](#listen-default) (default) | Hold the websocket open and stream frames until Ctrl-C. |
 | [`dump`](#dump-endpoint) `<endpoint>` | One-shot REST read, printed as pretty JSON. |
 | [`machines`](#machines) | List the machines on the account. |
+| [`ble`](#ble-subcommand--bluetooth) `<subcommand>` | Talk to a nearby machine over Bluetooth: scan, GATT table, token, reads, commands, live shot counter. |
 
 If you run `angcli` with no subcommand, it runs `listen`.
 
 A machine is selected with `--serial <SN>`; if omitted, the only machine is used,
 or you're prompted to choose when the account has several. `machines` lists the
-serials.
+serials. (`ble` selects a peripheral differently; see
+[Selecting the machine and the token](#selecting-the-machine-and-the-token).)
 
 ---
 
@@ -171,6 +177,231 @@ MR013437	Linea Micra	CoffeeMachine
 PC004077	Pico	Grinder
 ```
 
+---
+
+### `ble <subcommand>` — Bluetooth
+
+`angcli ble` talks to a nearby machine directly over Bluetooth Low Energy,
+through Angstrom's `LaMarzoccoBluetoothClient` and the CoreBluetooth transport
+from `AngstromBluetooth`. It needs no cloud connection when you pass the
+peripheral and the token yourself. It's the instrument for the hardware
+questions the Bluetooth port leaves open (which GATT service hosts the
+characteristics, the advertised name format, the shot-counter replay, …).
+
+| Subcommand | Needs cloud? | Needs token? | Output (stdout, one JSON object per line) |
+|---|---|---|---|
+| `ble scan [--duration <s>] [--all]` | no | no | `{"id","name","rssi"}` per peripheral |
+| `ble gatt --peripheral <uuid>` | no | no | `{"characteristic","properties":[…],"service"}` per characteristic |
+| `ble token --peripheral <uuid> [--show-secret]` | no | — (pairing mode) | `{"length":n,"token":"**REDACTED**"}` |
+| `ble read <setting\|all> [selection]` | optional | yes | `{"decoded","raw","setting","ts"}` per setting |
+| `ble cmd <power\|steam\|temp\|standby> … --confirm [selection]` | optional | yes | `{"command","status":{"id","message","status"},"success":bool,"ts"}` |
+| `ble listen [selection] [--raw\|--decoded]` | optional | yes | raw frame lines and decoded event lines until Ctrl-C (or until the shot counter gives up: error on stderr, non-zero exit) |
+
+`[selection]` is `--peripheral <uuid>`, `--serial <SN>` and `--ble-token <t>`,
+described next. Every `ble` line is compact JSON with its keys in **sorted**
+order (as listed above), so the same input always prints the same text; see
+[Bluetooth output format](#bluetooth-output-format).
+
+#### Selecting the machine and the token
+
+**Peripheral.** Pass `--peripheral <uuid>` (an `id` printed by `ble scan`; it's
+a CoreBluetooth identifier for your Mac, **not** a MAC address). Without it,
+angcli scans for 5 seconds and keeps the La Marzocco machines (names starting
+with `MICRA`, `MINI`, `LINEA` or `GS3`):
+
+- exactly one match → it's used;
+- several → you pick one on stderr;
+- none → `No La Marzocco machine found nearby`.
+
+**Token**, first match wins:
+
+1. `--ble-token <t>`. **Discouraged:** it lands in your shell history.
+2. The `LAMARZOCCO_BLE_TOKEN` environment variable.
+3. The cloud: angcli signs in (as for the cloud commands), picks the machine with
+   `--serial` (or the only one / a prompt) and reads its Bluetooth token. If the
+   cloud has none, it fails with `The cloud has no Bluetooth token for <serial>.
+   Use 'angcli ble token' in pairing mode or the QR label.`
+
+The token can also be read from the machine in pairing mode (`ble token`) or
+from the QR label inside the machine's chassis. angcli **never persists** the
+token or the peripheral identifier: pass `--peripheral` again, or let it rescan.
+
+```bash
+export LAMARZOCCO_BLE_TOKEN='**REDACTED**'     # your token; never commit it
+swift run angcli ble read all --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20
+```
+
+#### Bluetooth permission (macOS TCC)
+
+macOS asks for Bluetooth access on the first `ble` command. `angcli` embeds an
+Info.plist in its binary (`cli/Support/Info.plist`, linked into the
+`__TEXT,__info_plist` section) with the usage description *"angcli talks to your
+La Marzocco machine over Bluetooth for debugging."*
+
+- Run from a terminal, the grant is expected to go to the **terminal app**
+  (Terminal, iTerm2, VS Code, …), not to angcli. Over ssh or under launchd,
+  Bluetooth access is expected to be unauthorized. (Not yet verified on hardware.)
+- Access denied → `Bluetooth access denied. Grant it to your terminal app in
+  System Settings › Privacy & Security › Bluetooth.`
+- Bluetooth off → `Bluetooth is off.`
+- Whether a grant survives rebuilding the binary is not yet verified; if access
+  stops working after a rebuild, check the Bluetooth list in System Settings.
+
+#### `ble scan`
+
+Scan and print one line per peripheral. Without `--all`, only La Marzocco
+machines (the name-prefix filter above) are printed. `--all` prints every
+peripheral seen, unfiltered (`name` may be `null`), and the count to stderr — use
+it to learn the real advertised names.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--duration <s>` | `5` | Scan time in seconds. |
+| `--all` | off | Don't filter by name. |
+
+```bash
+swift run angcli ble scan
+swift run angcli ble scan --all --duration 10
+```
+
+```json
+{"id":"2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20","name":"MICRA…","rssi":-58}
+```
+
+#### `ble gatt`
+
+Connect (no authentication) and print the full GATT table: one line per
+characteristic with its service and properties. Use it to see which service
+hosts the La Marzocco characteristics (`0a0b7847-…` to `0e0b7847-…`). Every
+UUID is printed in lowercase, full 128-bit form; a short SIG UUID is expanded
+(`180a` prints as `0000180a-0000-1000-8000-00805f9b34fb`).
+
+```bash
+swift run angcli ble gatt --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20
+```
+
+Each line has the shape (property names elided here):
+
+```
+{"characteristic":"0a0b7847-e12b-09a8-b04b-8e0922a9abab","properties":[…],"service":"<service uuid>"}
+```
+
+#### `ble token`
+
+Read the Bluetooth token from a machine **in pairing mode** (see its manual). By
+default the token is masked and only its length is printed:
+
+```
+{"length":n,"token":"**REDACTED**"}
+```
+
+`n` is the token's length in Unicode scalars. `--show-secret` prints the real
+token in `token`, to stdout only. If the machine refuses
+the read (expected outside pairing mode), the error carries an "Is the machine in
+pairing mode?" hint.
+
+#### `ble read <setting|all>`
+
+Read one setting, or all six, over an authenticated link. Settings:
+`machineCapabilities`, `machineMode`, `tankStatus`, `boilers`, `smartStandBy`,
+`isPlumbedIn`. Each line carries the verbatim reply (`raw`: its UTF-8 text, or
+hex when it isn't UTF-8) next to Angstrom's decoded value (`decoded`, `null`
+when there is no typed value).
+
+```bash
+swift run angcli ble read machineMode --serial MR013437
+swift run angcli ble read all --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20 | jq .
+```
+
+```json
+{"decoded":"BrewingMode","raw":"\"BrewingMode\"","setting":"machineMode","ts":"2026-11-14T09:12:03.640Z"}
+```
+
+#### `ble cmd` (actuates hardware)
+
+Send a command over Bluetooth. **It changes your real machine**, so every
+`ble cmd` refuses to run without `--confirm`.
+
+| Command | Effect |
+|---|---|
+| `ble cmd power <on\|off> --confirm` | Power on, or standby. |
+| `ble cmd steam <on\|off> --confirm` | Enable or disable the steam boiler. |
+| `ble cmd temp <coffee\|steam> <celsius> --confirm` | Set a boiler's target temperature. |
+| `ble cmd standby --enabled <bool> --minutes <n> --mode <LastBrewing\|PowerOn> --confirm` | Configure smart standby. |
+
+Each prints the machine's command status and `success` (`true` only for a
+`success` status). If the status is anything else, the line is still printed,
+then angcli prints an error to stderr and exits non-zero:
+
+```bash
+swift run angcli ble cmd power on --confirm --serial MR013437
+```
+
+#### `ble listen`
+
+Connect, authenticate, start the shot counter and stream until Ctrl-C (which
+stops the shot counter, disconnects and exits 0). The streams are registered
+before the shot counter starts, so the authentication and subscribe frames are
+captured too. `--raw` prints only raw frames, `--decoded` only decoded events;
+both are shown by default. If the machine has no shot counter, angcli prints
+`Shot counter not supported by this machine` to stderr and exits non-zero. If
+the shot counter gives up (3 rejected logins while reconnecting, or the
+shot-counter characteristic disappearing), angcli prints the error to stderr, disconnects and exits
+non-zero, in every output mode.
+
+```bash
+swift run angcli ble listen --serial MR013437
+swift run angcli ble listen --peripheral 2B9C4F0E-7A31-4D6B-9E0C-5F1A8D3C7B20 --decoded | jq .
+```
+
+Remember the first notification after every subscribe is the machine's replay of
+its last one, and Angstrom drops it (the raw view still shows it).
+
+#### Bluetooth output format
+
+Every `ble` line is compact JSON with **sorted keys** (and unescaped slashes).
+Raw lines carry the `ts` and `dir` of the cloud `listen`, with `>>` for writes
+and `<<` for reads, notifications and lifecycle events, as
+`{"char","dir","hex","kind","text","ts"}`:
+
+```json
+{"char":null,"dir":"<<","hex":"5b636f6e6e656374696e675d","kind":"event","text":"[connecting]","ts":"2026-11-14T09:12:02.870Z"}
+{"char":"0d0b7847-e12b-09a8-b04b-8e0922a9abab","dir":">>","hex":"**REDACTED**","kind":"write","text":"**REDACTED**","ts":"2026-11-14T09:12:03.101Z"}
+{"char":"0a0b7847-e12b-09a8-b04b-8e0922a9abab","dir":">>","hex":"6d616368696e654d6f646500","kind":"write","text":"machineMode\u0000","ts":"2026-11-14T09:12:03.512Z"}
+```
+
+`kind` is `write`, `read`, `notification` or `event`. `char` is the lowercase
+characteristic UUID, and always `null` on an `event` line. `text` is present
+when the bytes are valid UTF-8 (the key is left out otherwise), and for `event`
+it's the marker (`[connecting]`, `[connected]`, `[authenticated]`,
+`[subscribed]`, `[replay dropped]`, `[mtu <n>]`, …).
+
+Decoded lines are `{"event","ts","value"}` with `event` one of `connected`,
+`disconnected`, `subscribed`, `unsubscribed`, `brewing`, `telemetry`, `gaveUp`.
+`value` is `{}` for the events that carry no data and `{"error":"…"}` for
+`gaveUp`:
+
+```json
+{"event":"connected","ts":"2026-11-14T09:12:03.230Z","value":{}}
+{"event":"telemetry","ts":"2026-11-14T09:12:05.004Z","value":{"coffeeBoilerTemperature":93.5,"machineMode":"BrewingMode","steamBoilerTemperature":124}}
+```
+
+#### Redaction
+
+The token never reaches your terminal unless you ask for it:
+
+- Every frame the library flags as secret prints `**REDACTED**` for **both**
+  `hex` and `text`. Today that is the authentication write; the pairing-mode
+  token read (`ble token`) emits no raw frame at all.
+- As a second line of defence, any write to the auth characteristic
+  `0d0b7847-e12b-09a8-b04b-8e0922a9abab` and any read of the token
+  characteristic `0c0b7847-e12b-09a8-b04b-8e0922a9abab` is redacted whatever the
+  flag says.
+- `ble token` masks the token unless `--show-secret` is given (stdout only).
+- No error message or log line contains the token.
+- The existing masking of `bleAuthToken` and the STOMP bearer token in
+  `dump`/`listen` is unchanged.
+
 ## Output format
 
 `listen` writes **one JSON object per line** to **stdout** (jq-friendly), each
@@ -182,11 +413,14 @@ tagged with an ISO-8601 `ts` and a `dir`:
   and anything else the server sends.
 
 `--raw` lines carry the verbatim frame text under `raw`; `--decoded` lines carry
-Angstrom's parsed push under `decoded`:
+Angstrom's parsed push under `decoded`. These lines use Foundation's default
+JSON encoding: key order is **not** fixed (it can differ between lines and
+runs; select fields with `jq` rather than matching text), and `/` is escaped as
+`\/`:
 
 ```json
-{"ts":"2026-06-29T00:47:50.327Z","dir":">>","raw":"SUBSCRIBE\ndestination:/ws/sn/MR013437/dashboard\nack:auto\nid:21A2…\ncontent-length:0\n\n\u0000"}
-{"ts":"2026-06-29T00:47:51.612Z","dir":"<<","decoded":{"connected":true,"widgets":[ … ],"removedWidgets":[ … ],"commands":[]}}
+{"dir":">>","raw":"SUBSCRIBE\ndestination:\/ws\/sn\/MR013437\/dashboard\nack:auto\nid:21A2…\ncontent-length:0\n\n\u0000","ts":"2026-06-29T00:47:50.327Z"}
+{"dir":"<<","decoded":{"removedWidgets":[ … ],"connected":true,"widgets":[ … ],"commands":[]},"ts":"2026-06-29T00:47:51.612Z"}
 ```
 
 Status, connection lifecycle, and errors go to **stderr**, so stdout stays a
@@ -220,6 +454,7 @@ swift run angcli listen --raw \
 | | |
 |---|---|
 | `LAMARZOCCO_USERNAME` / `LAMARZOCCO_PASSWORD` | Credentials (else prompted). Never persisted. |
+| `LAMARZOCCO_BLE_TOKEN` | Bluetooth token for `ble`, used when `--ble-token` is not given (else the cloud). Never persisted. |
 | `~/.config/angstrom/installation.json` | Per-install key + `isRegistered`, mode `0600`. Honors `XDG_CONFIG_HOME`. |
 
 The installation key embeds a P-256 private-key scalar — **treat the file as a

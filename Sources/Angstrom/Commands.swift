@@ -8,6 +8,14 @@ public struct CommandResponse: Sendable, Hashable, Codable {
     public let id: String
     public let status: CommandStatus
     public let errorCode: String?
+
+    /// Builds a response directly — used by the device layer to report a Bluetooth command that
+    /// succeeded without the cloud (D18). Same labels as the synthesized memberwise initializer.
+    package init(id: String, status: CommandStatus, errorCode: String?) {
+        self.id = id
+        self.status = status
+        self.errorCode = errorCode
+    }
 }
 
 /// The status of a dispatched command.
