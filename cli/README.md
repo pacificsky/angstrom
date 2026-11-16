@@ -330,7 +330,8 @@ Send a command over Bluetooth. **It changes your real machine**, so every
 | `ble cmd standby --enabled <bool> --minutes <n> --mode <LastBrewing\|PowerOn> --confirm` | Configure smart standby. |
 
 Each prints the machine's command status and `success` (`true` only for a
-`success` status):
+`success` status). If the status is anything else, the line is still printed,
+then angcli prints an error to stderr and exits non-zero:
 
 ```bash
 swift run angcli ble cmd power on --confirm --serial MR013437

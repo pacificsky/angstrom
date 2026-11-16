@@ -240,7 +240,8 @@ headers, and masks `bleAuthToken` and the STOMP bearer token in printed output. 
 `AngstromBluetooth`; an embedded `cli/Support/Info.plist` carries the Bluetooth usage string)
 is the BLE counterpart: scan for machines (`--all` unfiltered), dump the GATT table, read the
 token in pairing mode (masked unless `--show-secret`), raw + decoded reads, commands (which
-actuate hardware and refuse to run without `--confirm`), and `listen` for raw frames plus
+actuate hardware, refuse to run without `--confirm`, and exit non-zero when the machine's status
+is not a success), and `listen` for raw frames plus
 decoded connection/shot-counter events until SIGINT (if the shot counter gives up, `listen`
 prints the mapped error to stderr, disconnects and exits non-zero in every output mode). `ble`
 JSON lines are printed with sorted keys (key order is not part of the contract). The peripheral comes from `--peripheral`

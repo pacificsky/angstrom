@@ -22,7 +22,8 @@
 > `deinit` teardown; long-lived machine tasks do not retain the client), §5.7 (token-read frames),
 > §12 D5 (sub-items in order), wording in §1.4, §2.1 and §4.15. From the Wave 4 fix reviews: §5.5
 > (a running reconnect loop retains the client), §4.15 (the connection observer seeds from
-> `isConnected` after registering).
+> `isConnected` after registering). **Amended 2026-11-15** (owner request): §10.1 and §10.3
+> (`ble cmd` exits non-zero on a non-success status).
 >
 > This document is the single source of truth for every implementation agent. Agents work in
 > parallel and do not talk to each other, so:
@@ -3094,7 +3095,8 @@ Each subcommand lives in its own file under `cli/Sources/angcli/Ble/`.
 | `ble listen [selection] [--raw\|--decoded]` | optional | yes | `rawFrames`, `connectionEvents`, `shotCounterEvents`, `startShotCounter` | raw frame lines and decoded event lines until SIGINT |
 
 `ble cmd` **actuates hardware**. It refuses to run without `--confirm`, as the design note
-(`cli/SPEC.md`) requires for commands with side effects.
+(`cli/SPEC.md`) requires for commands with side effects. A non-success status fails the command
+(§10.3).
 
 ### 10.2 Selection: peripheral and token
 
@@ -3124,6 +3126,11 @@ Each subcommand lives in its own file under `cli/Sources/angcli/Ble/`.
   0, mirroring `Listen.swift:34-38`. If the shot counter gives up (`ShotCounterEvent.gaveUp(error)`),
   `ble listen` prints the mapped error to stderr, disconnects and exits non-zero in every output
   mode, instead of sitting silent until SIGINT.
+- `ble cmd` prints its status line for every status the machine returns. If the status is not a
+  success (`BluetoothCommandStatus.isSuccess` is false), it then prints
+  ``CLIError("The machine did not report success for `<command>`.")`` to stderr and exits non-zero.
+  The library still *returns* a non-success status (§3.7); only the CLI turns it into a failed
+  run. Angstrom-only: upstream has no CLI.
 - `.bluetoothUnavailable(.unauthorized(_))` → `CLIError("Bluetooth access denied. Grant it to your terminal app in System Settings › Privacy & Security › Bluetooth.")`.
   `.poweredOff` → `CLIError("Bluetooth is off.")`.
 

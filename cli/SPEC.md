@@ -128,7 +128,9 @@ selection and output live in `BleSession.swift` and `BleOutput.swift`.
 
 **`ble cmd` actuates hardware.** Like every command with side effects (see the
 deferred `watch` mode under Caveats), it refuses to run without `--confirm`,
-enforced in `validate()`.
+enforced in `validate()`. A non-success command status is still printed as the
+status line; angcli then prints an error to stderr and exits non-zero, so a
+script can rely on the exit status.
 
 `ble listen` registers `rawFrames()`, `connectionEvents()` and
 `shotCounterEvents()` **before** `startShotCounter()`, so the authentication and

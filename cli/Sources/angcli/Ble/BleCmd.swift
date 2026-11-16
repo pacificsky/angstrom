@@ -5,7 +5,8 @@ import Angstrom
 /// `angcli ble cmd <power|steam|temp|standby>` (SPEC §10.1). Every subcommand actuates the
 /// machine, so each refuses to run without `--confirm` (checked in `validate()`, before any
 /// Bluetooth or cloud work). Each prints one `{"ts","command","status":{id,message,status},"success":bool}`
-/// line (SPEC §10.3) through `BleOutput.commandLine`; a non-success status is printed, not thrown.
+/// line (SPEC §10.3) through `BleOutput.commandLine`. A non-success status is still printed, and
+/// then fails the command (stderr message, non-zero exit) so scripts can rely on the exit status.
 struct BleCmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "cmd",
@@ -177,7 +178,15 @@ struct BleCmd: AsyncParsableCommand {
         }
     }
 
-    /// Connect per `target`, run one command, print its status line, and disconnect.
+    /// The error that ends the run for a command status: nil for a success status, otherwise a
+    /// `CLIError` (printed to stderr by ArgumentParser, exit status 1). The text names only the
+    /// command the user typed; the machine's own status text is in the JSON line on stdout.
+    static func refusalError(for status: BluetoothCommandStatus, command: String) -> CLIError? {
+        status.isSuccess ? nil : CLIError("The machine did not report success for `\(command)`.")
+    }
+
+    /// Connect per `target`, run one command, disconnect, print its status line, and fail the
+    /// run if the status is not a success.
     private static func send(
         _ command: String,
         target: BleTargetOptions,
@@ -204,5 +213,6 @@ struct BleCmd: AsyncParsableCommand {
         } else {
             Stderr.log("· (failed to encode the command status for output)")
         }
+        if let refusal = refusalError(for: status, command: command) { throw refusal }
     }
 }

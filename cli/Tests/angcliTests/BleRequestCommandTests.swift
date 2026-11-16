@@ -201,6 +201,22 @@ final class BleRequestCommandTests: XCTestCase {
         XCTAssertEqual(negativeFinite.boiler, .steam)
     }
 
+    /// Angstrom-only: §10.3 — a success status (compared case-insensitively, as `isSuccess` does)
+    /// ends `ble cmd` normally; any other status ends it with an error, so the exit is non-zero.
+    func testCmdFailsOnNonSuccessStatus() {
+        for status in ["success", "Success", "SUCCESS"] {
+            let ok = BluetoothCommandStatus(id: "1", message: "", status: status)
+            XCTAssertNil(BleCmd.refusalError(for: ok, command: "power on"), status)
+        }
+        for status in ["error", "Failed", "", "successful", " success"] {
+            let refused = BluetoothCommandStatus(id: "1", message: "boiler busy", status: status)
+            let error = BleCmd.refusalError(for: refused, command: "temp coffee 200.0")
+            XCTAssertEqual(error?.message, "The machine did not report success for `temp coffee 200.0`.", status)
+            // The machine's own text stays out of the stderr message (it is in the JSON line).
+            XCTAssertFalse(error?.message.contains("boiler busy") ?? true, status)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Parses `angcli ble <arguments>` from the real root and requires a `BleRead`.
